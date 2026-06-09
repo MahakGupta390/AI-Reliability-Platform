@@ -1,0 +1,145 @@
+version: "3.9"
+
+# WHY docker-compose:
+# Spins up all 4 containers (3 services + MongoDB) with one command.
+# Handles networking, env vars, port mapping, health checks, and
+# startup order (depends_on). Critical for local development and
+# for simulating the production environment faithfully.
+
+services:
+
+  # ── MongoDB ──────────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: reliability-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"    # Expose to host for debugging with MongoDB Compass
+    volumes:
+      - mongo_data:/data/db   # Persist data across container restarts
+    networks:
+      - reliability-net
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── auth-service ─────────────────────────────────────────────────────────────
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: auth-service
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      SERVICE_NAME: auth-service
+      NODE_ENV: production
+      # Inside Docker network, services communicate by container name, not localhost
+      MONGO_URI: mongodb://mongodb:27017/auth_db
+      JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_change_in_prod}
+      JWT_EXPIRES_IN: 7d
+      LOG_LEVEL: info
+      # Failure simulation toggles (Phase 7) — override via .env or CLI
+      HIGH_LATENCY: ${HIGH_LATENCY:-false}
+      LATENCY_MS: ${LATENCY_MS:-0}
+      FAILURE_RATE: ${FAILURE_RATE:-0}
+      TIMEOUT_MODE: ${TIMEOUT_MODE:-false}
+    volumes:
+      - ./auth-service/logs:/app/logs    # Mount logs to host for inspection
+    networks:
+      - reliability-net
+    depends_on:
+      mongodb:
+        condition: service_healthy    # Wait until Mongo passes health check
+    healthcheck:
+      test: wget -qO- http://localhost:3001/health || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── payment-service ───────────────────────────────────────────────────────────
+  payment-service:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    container_name: payment-service
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      SERVICE_NAME: payment-service
+      NODE_ENV: production
+      MONGO_URI: mongodb://mongodb:27017/payment_db
+      LOG_LEVEL: info
+      HIGH_LATENCY: ${HIGH_LATENCY:-false}
+      LATENCY_MS: ${LATENCY_MS:-0}
+      FAILURE_RATE: ${FAILURE_RATE:-0}
+      TIMEOUT_MODE: ${TIMEOUT_MODE:-false}
+    volumes:
+      - ./payment-service/logs:/app/logs
+    networks:
+      - reliability-net
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: wget -qO- http://localhost:3002/health || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── order-service ─────────────────────────────────────────────────────────────
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: order-service
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      PORT: 3003
+      SERVICE_NAME: order-service
+      NODE_ENV: production
+      MONGO_URI: mongodb://mongodb:27017/order_db
+      # These use Docker service names (container DNS), not localhost
+      AUTH_SERVICE_URL: http://auth-service:3001
+      PAYMENT_SERVICE_URL: http://payment-service:3002
+      SERVICE_TIMEOUT_MS: 5000
+      LOG_LEVEL: info
+      HIGH_LATENCY: ${HIGH_LATENCY:-false}
+      LATENCY_MS: ${LATENCY_MS:-0}
+      FAILURE_RATE: ${FAILURE_RATE:-0}
+      TIMEOUT_MODE: ${TIMEOUT_MODE:-false}
+    volumes:
+      - ./order-service/logs:/app/logs
+    networks:
+      - reliability-net
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+
+# ── Named volumes ───────────────────────────────────────────────────────────────
+volumes:
+  mongo_data:
+    driver: local
+
+# ── Shared network ──────────────────────────────────────────────────────────────
+# All containers join this network. They can reach each other by service name.
+# auth-service is accessible as http://auth-service:3001 from other containers.
+# From the HOST machine, they're accessible as http://localhost:3001.
+networks:
+  reliability-net:
+    driver: bridge
