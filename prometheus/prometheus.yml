@@ -1,0 +1,93 @@
+# prometheus/prometheus.yml
+#
+# Prometheus server configuration for AI Reliability Platform.
+#
+# HOW PROMETHEUS SCRAPING WORKS:
+# Prometheus is a PULL-based system. It periodically calls your services'
+# metrics endpoints and stores the returned values with timestamps.
+# This is the opposite of pushing metrics TO a server.
+#
+# PULL vs PUSH:
+# Pull: Prometheus → your service (Prometheus controls timing)
+# Push: your service → metrics server (service controls timing)
+#
+# Pull advantages:
+# - If a service is down, Prometheus knows immediately (scrape fails)
+# - Prometheus controls rate — services can't flood Prometheus
+# - Easy to add new services without changing existing code
+#
+# SCRAPE INTERVAL:
+# 15s is the Prometheus standard. Lower = more storage, more CPU.
+# 5s is appropriate for high-frequency debugging.
+# 60s is appropriate for low-churn infrastructure metrics.
+# We use 15s — good balance of freshness vs overhead.
+
+global:
+  # How often Prometheus scrapes all targets by default
+  scrape_interval: 15s
+
+  # How often Prometheus evaluates alerting rules (Phase 9F)
+  evaluation_interval: 15s
+
+  # Labels added to all time-series scraped by THIS Prometheus instance.
+  # Useful when you have multiple Prometheus instances (prod vs staging).
+  external_labels:
+    environment: 'development'
+    platform: 'ai-reliability-platform'
+
+# Alerting configuration — empty for now, populated in Phase 9F
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
+
+# Rule files for alerting — Phase 9F
+# rule_files:
+#   - "alert_rules.yml"
+
+# ── SCRAPE CONFIGURATIONS ─────────────────────────────────────────────────────
+scrape_configs:
+
+  # ── Prometheus self-monitoring ──────────────────────────────────────────────
+  # Prometheus scrapes itself so you can monitor Prometheus health.
+  # Tells you: scrape success rate, query duration, storage size.
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # ── auth-service ───────────────────────────────────────────────────────────
+  - job_name: 'auth-service'
+
+    # Override global interval for this job if needed
+    # scrape_interval: 10s
+
+    # Path where our service exposes Prometheus metrics
+    # Must match the route we defined: GET /metrics/prometheus
+    metrics_path: '/metrics/prometheus'
+
+    # Static config: hardcoded target list
+    # In Kubernetes you'd use kubernetes_sd_configs for auto-discovery
+    static_configs:
+      - targets: ['auth-service:3001']
+        # Labels added to all time-series from this target
+        labels:
+          service: 'auth-service'
+          team: 'platform'
+
+  # ── payment-service ─────────────────────────────────────────────────────────
+  - job_name: 'payment-service'
+    metrics_path: '/metrics/prometheus'
+    static_configs:
+      - targets: ['payment-service:3002']
+        labels:
+          service: 'payment-service'
+          team: 'payments'
+
+  # ── order-service ───────────────────────────────────────────────────────────
+  - job_name: 'order-service'
+    metrics_path: '/metrics/prometheus'
+    static_configs:
+      - targets: ['order-service:3003']
+        labels:
+          service: 'order-service'
+          team: 'orders'

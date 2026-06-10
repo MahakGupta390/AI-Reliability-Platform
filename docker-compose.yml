@@ -1,11 +1,6 @@
 version: "3.9"
 
-# WHY docker-compose:
-# Spins up all 4 containers (3 services + MongoDB) with one command.
-# Handles networking, env vars, port mapping, health checks, and
-# startup order (depends_on). Critical for local development and
-# for simulating the production environment faithfully.
-
+# ── SERVICES ──────────────────────────────────────────────────────────────────
 services:
 
   # ── MongoDB ──────────────────────────────────────────────────────────────────
@@ -14,9 +9,9 @@ services:
     container_name: reliability-mongo
     restart: unless-stopped
     ports:
-      - "27017:27017"    # Expose to host for debugging with MongoDB Compass
+      - "27017:27017"
     volumes:
-      - mongo_data:/data/db   # Persist data across container restarts
+      - mongo_data:/data/db
     networks:
       - reliability-net
     healthcheck:
@@ -26,7 +21,7 @@ services:
       retries: 5
       start_period: 20s
 
-  # ── auth-service ─────────────────────────────────────────────────────────────
+  # ── auth-service ──────────────────────────────────────────────────────────────
   auth-service:
     build:
       context: ./auth-service
@@ -39,23 +34,21 @@ services:
       PORT: 3001
       SERVICE_NAME: auth-service
       NODE_ENV: production
-      # Inside Docker network, services communicate by container name, not localhost
       MONGO_URI: mongodb://mongodb:27017/auth_db
       JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_change_in_prod}
       JWT_EXPIRES_IN: 7d
       LOG_LEVEL: info
-      # Failure simulation toggles (Phase 7) — override via .env or CLI
       HIGH_LATENCY: ${HIGH_LATENCY:-false}
       LATENCY_MS: ${LATENCY_MS:-0}
       FAILURE_RATE: ${FAILURE_RATE:-0}
       TIMEOUT_MODE: ${TIMEOUT_MODE:-false}
     volumes:
-      - ./auth-service/logs:/app/logs    # Mount logs to host for inspection
+      - ./auth-service/logs:/app/logs
     networks:
       - reliability-net
     depends_on:
       mongodb:
-        condition: service_healthy    # Wait until Mongo passes health check
+        condition: service_healthy
     healthcheck:
       test: wget -qO- http://localhost:3001/health || exit 1
       interval: 15s
@@ -110,7 +103,6 @@ services:
       SERVICE_NAME: order-service
       NODE_ENV: production
       MONGO_URI: mongodb://mongodb:27017/order_db
-      # These use Docker service names (container DNS), not localhost
       AUTH_SERVICE_URL: http://auth-service:3001
       PAYMENT_SERVICE_URL: http://payment-service:3002
       SERVICE_TIMEOUT_MS: 5000
@@ -131,15 +123,66 @@ services:
       payment-service:
         condition: service_healthy
 
-# ── Named volumes ───────────────────────────────────────────────────────────────
+  # ── Prometheus ────────────────────────────────────────────────────────────────
+  # Prometheus scrapes metrics from all 3 services every 15 seconds
+  # and stores them as time-series data.
+  #
+  # WHY prometheus_data volume:
+  # Without a named volume, all scraped metrics are lost when the
+  # Prometheus container restarts. A named volume persists data across
+  # restarts — this is what gives you historical metrics queryability.
+  #
+  # WHY mount prometheus.yml as read-only (:ro):
+  # Prometheus only needs to READ its config. :ro prevents accidental
+  # writes and makes clear this file is configuration, not state.
+  #
+  # WHY depends_on the services:
+  # Prometheus can start before services are ready — it will show
+  # targets as DOWN and retry. But starting after services are healthy
+  # means the first scrape has data immediately.
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    command:
+      # Default storage retention: 15 days
+      # Increase for longer history at the cost of disk space
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      # Enable hot-reload via HTTP POST to /-/reload
+      - '--web.enable-lifecycle'
+      # Enable admin API for data deletion/snapshotting
+      - '--web.enable-admin-api'
+    volumes:
+      # Mount our prometheus.yml config (read-only)
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Named volume for persistent time-series storage
+      - prometheus_data:/prometheus
+    networks:
+      - reliability-net
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+
+# ── VOLUMES ────────────────────────────────────────────────────────────────────
 volumes:
   mongo_data:
     driver: local
+  # Prometheus time-series data survives container restarts
+  prometheus_data:
+    driver: local
 
-# ── Shared network ──────────────────────────────────────────────────────────────
-# All containers join this network. They can reach each other by service name.
-# auth-service is accessible as http://auth-service:3001 from other containers.
-# From the HOST machine, they're accessible as http://localhost:3001.
+# ── NETWORKS ──────────────────────────────────────────────────────────────────
+# All containers on this network can reach each other by service name.
+# From Prometheus container: auth-service is at http://auth-service:3001
+# From host machine: auth-service is at http://localhost:3001
 networks:
   reliability-net:
     driver: bridge

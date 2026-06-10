@@ -1,124 +1,169 @@
 /**
- * services/order.service.js — Order orchestration logic
+ * services/order.service.js — Order orchestration
  *
- * This is the most important service in the system because it demonstrates
- * the full distributed request lifecycle:
+ * CHANGES FROM PHASE 2:
+ * Added Prometheus metric recording for:
+ * - downstreamCallDuration: latency of auth-service and payment-service calls
+ * - downstreamCallsTotal: success/failure counts per downstream service
+ * - ordersTotal: final order outcomes (confirmed/failed)
  *
- * POST /orders flow:
- * 1. Validate user token → auth-service
- * 2. Calculate order total
- * 3. Process payment → payment-service
- * 4. Save confirmed order → MongoDB
- * 5. Return complete order with payment reference
- *
- * WHY we time each external call (serviceLatencies):
- * When the order endpoint is slow, we need to know WHERE the slowness is.
- * Was auth-service slow? Was payment-service slow? Or is our DB slow?
- * These per-hop timings are stored on the order document and will be the
- * primary data source for the AI reliability analysis in Phase 9.
- *
- * WHY we handle each service failure differently:
- * - Auth failure: 401 — don't create order, user is not verified
- * - Payment failure: 402 — create order in 'failed' state (for audit trail)
- * - Auth unreachable: 503 — cascade failure, surface clearly
+ * These are recorded at the service layer because:
+ * - Downstream call durations are not visible to HTTP middleware
+ * - Order outcomes are business logic, not HTTP-level data
  */
 
 const Order = require('../models/order.model');
-const { authClient, paymentClient } = require('../config/httpClient');
+const { authClient, paymentClient, callWithRetry } = require('../config/httpClient');
 const logger = require('../config/logger');
+const {
+  ordersTotal,
+  downstreamCallsTotal,
+  downstreamCallDuration,
+} = require('../config/prometheusMetrics');
 
 const SERVICE_NAME = process.env.SERVICE_NAME || 'order-service';
 
-/**
- * Calculate total from items array
- */
 const calculateTotal = (items) => {
-  return items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  return parseFloat(
+    items.reduce((sum, item) => sum + item.price * item.quantity, 0).toFixed(2)
+  );
 };
 
-/**
- * createOrder
- * Full orchestration: auth → payment → save order
- */
+const buildServiceError = (axiosError, fallbackMessage, fallbackStatus) => {
+  const err = new Error(
+    axiosError.upstreamMessage ||
+    axiosError.response?.data?.message ||
+    fallbackMessage
+  );
+
+  if (axiosError.isTimeout) {
+    err.message = `${axiosError.upstreamService} timed out`;
+    err.statusCode = 503;
+  } else if (axiosError.isUnreachable) {
+    err.message = `${axiosError.upstreamService} is unavailable`;
+    err.statusCode = 503;
+  } else {
+    err.statusCode = axiosError.upstreamStatus ||
+                     axiosError.response?.status ||
+                     fallbackStatus;
+  }
+
+  err.upstreamService = axiosError.upstreamService;
+  return err;
+};
+
 const createOrder = async ({ token, items, shippingAddress, currency }, requestId) => {
   const orderStart = Date.now();
   const serviceLatencies = { authService: 0, paymentService: 0, totalMs: 0 };
 
-  // ── STEP 1: Verify user with auth-service ───────────────────────────────────
-  logger.info('Step 1: Verifying user with auth-service', {
+  // ── STEP 1: Verify user identity ─────────────────────────────────────────
+  logger.info('Step 1/4 — Verifying user identity', {
     service: SERVICE_NAME,
     requestId,
   });
 
   let userId;
   const authStart = Date.now();
+
   try {
-    const authResponse = await authClient.post(
-      '/auth/verify',
-      { token },
-      { headers: { 'x-request-id': requestId } }
+    const authResponse = await callWithRetry(
+      () => authClient.post(
+        '/auth/verify',
+        { token },
+        { headers: { 'x-request-id': requestId } }
+      ),
+      2,
+      200
     );
+
     serviceLatencies.authService = Date.now() - authStart;
     userId = authResponse.data.data.userId;
 
-    logger.info('User verified successfully', {
+    // Record successful auth-service call in Prometheus
+    downstreamCallsTotal.inc({ target: 'auth-service', status: 'success' });
+    downstreamCallDuration.observe(
+      { target: 'auth-service', operation: 'verify-token' },
+      serviceLatencies.authService / 1000
+    );
+
+    logger.info('Step 1/4 — User verified', {
       service: SERVICE_NAME,
       requestId,
       userId,
-      authLatency: serviceLatencies.authService,
+      authLatencyMs: serviceLatencies.authService,
     });
+
   } catch (err) {
     serviceLatencies.authService = Date.now() - authStart;
 
-    // Auth service is down (network error)
-    if (!err.response) {
-      const serviceErr = new Error('Authentication service is unavailable');
-      serviceErr.statusCode = 503;
-      serviceErr.upstreamService = 'auth-service';
-      throw serviceErr;
-    }
-
-    // Auth service returned 401/403
-    const authErr = new Error(
-      err.response?.data?.message || 'Token verification failed'
+    // Record failed auth-service call
+    const failStatus = err.isTimeout ? 'timeout'
+                     : err.isUnreachable ? 'unreachable'
+                     : 'error';
+    downstreamCallsTotal.inc({ target: 'auth-service', status: failStatus });
+    downstreamCallDuration.observe(
+      { target: 'auth-service', operation: 'verify-token' },
+      serviceLatencies.authService / 1000
     );
-    authErr.statusCode = err.response?.status || 401;
-    throw authErr;
+
+    logger.error('Step 1/4 — Auth verification failed', {
+      service: SERVICE_NAME,
+      requestId,
+      authLatencyMs: serviceLatencies.authService,
+      error: err.message,
+    });
+
+    throw buildServiceError(err, 'User verification failed', 401);
   }
 
-  // ── STEP 2: Calculate order total ───────────────────────────────────────────
+  // ── STEP 2: Calculate total ───────────────────────────────────────────────
   const totalAmount = calculateTotal(items);
 
-  logger.info('Order total calculated', {
+  logger.info('Step 2/4 — Order total calculated', {
     service: SERVICE_NAME,
     requestId,
     userId,
     itemCount: items.length,
     totalAmount,
-    currency,
+    currency: currency || 'USD',
   });
 
-  // ── STEP 3: Process payment via payment-service ─────────────────────────────
-  logger.info('Step 3: Processing payment with payment-service', {
+  // ── STEP 3: Persist order ────────────────────────────────────────────────
+  logger.info('Step 3/4 — Creating order record', {
     service: SERVICE_NAME,
     requestId,
     userId,
     totalAmount,
   });
 
-  // Create order in pending state BEFORE calling payment
-  // This gives us an audit record even if payment fails
   const order = await Order.create({
     userId: userId.toString(),
     items,
     totalAmount,
     currency: currency || 'USD',
-    shippingAddress,
+    shippingAddress: shippingAddress || {},
     status: 'payment_processing',
     serviceLatencies,
   });
 
+  logger.info('Step 3/4 — Order record created', {
+    service: SERVICE_NAME,
+    requestId,
+    orderId: order._id,
+    status: order.status,
+  });
+
+  // ── STEP 4: Process payment ───────────────────────────────────────────────
+  logger.info('Step 4/4 — Processing payment', {
+    service: SERVICE_NAME,
+    requestId,
+    orderId: order._id,
+    userId,
+    totalAmount,
+  });
+
   const paymentStart = Date.now();
+
   try {
     const paymentResponse = await paymentClient.post(
       '/payment',
@@ -127,6 +172,7 @@ const createOrder = async ({ token, items, shippingAddress, currency }, requestI
         userId: userId.toString(),
         amount: totalAmount,
         currency: currency || 'USD',
+        method: 'card',
       },
       { headers: { 'x-request-id': requestId } }
     );
@@ -134,59 +180,71 @@ const createOrder = async ({ token, items, shippingAddress, currency }, requestI
     serviceLatencies.paymentService = Date.now() - paymentStart;
     serviceLatencies.totalMs = Date.now() - orderStart;
 
-    const paymentId = paymentResponse.data.data.payment._id;
+    // Record successful payment-service call
+    downstreamCallsTotal.inc({ target: 'payment-service', status: 'success' });
+    downstreamCallDuration.observe(
+      { target: 'payment-service', operation: 'process-payment' },
+      serviceLatencies.paymentService / 1000
+    );
 
-    // ── STEP 4: Confirm order ─────────────────────────────────────────────────
+    const payment = paymentResponse.data.data.payment;
+
     order.status = 'confirmed';
-    order.paymentId = paymentId;
+    order.paymentId = payment._id.toString();
     order.serviceLatencies = serviceLatencies;
     await order.save();
 
-    logger.info('Order created and confirmed', {
+    // Record successful order
+    ordersTotal.inc({ status: 'confirmed' });
+
+    logger.info('Order confirmed successfully', {
       service: SERVICE_NAME,
       requestId,
       orderId: order._id,
-      userId,
-      paymentId,
+      paymentId: payment._id,
       totalAmount,
       serviceLatencies,
     });
 
     return order;
+
   } catch (err) {
     serviceLatencies.paymentService = Date.now() - paymentStart;
     serviceLatencies.totalMs = Date.now() - orderStart;
 
-    // Save order in failed state for audit trail
+    // Record failed payment-service call
+    const failStatus = err.isTimeout ? 'timeout'
+                     : err.isUnreachable ? 'unreachable'
+                     : 'error';
+    downstreamCallsTotal.inc({ target: 'payment-service', status: failStatus });
+    downstreamCallDuration.observe(
+      { target: 'payment-service', operation: 'process-payment' },
+      serviceLatencies.paymentService / 1000
+    );
+
     order.status = 'failed';
-    order.failureReason = err.response?.data?.message || err.message;
+    order.failureReason =
+      err.upstreamMessage ||
+      err.response?.data?.message ||
+      err.message;
     order.serviceLatencies = serviceLatencies;
     await order.save();
 
-    logger.error('Payment failed — order marked as failed', {
+    // Record failed order
+    ordersTotal.inc({ status: 'failed' });
+
+    logger.error('Step 4/4 — Payment failed', {
       service: SERVICE_NAME,
       requestId,
       orderId: order._id,
-      error: order.failureReason,
+      failureReason: order.failureReason,
       serviceLatencies,
     });
 
-    if (!err.response) {
-      const serviceErr = new Error('Payment service is unavailable');
-      serviceErr.statusCode = 503;
-      serviceErr.upstreamService = 'payment-service';
-      throw serviceErr;
-    }
-
-    const payErr = new Error(err.response?.data?.message || 'Payment processing failed');
-    payErr.statusCode = err.response?.status || 402;
-    throw payErr;
+    throw buildServiceError(err, 'Payment processing failed', 402);
   }
 };
 
-/**
- * getOrderById
- */
 const getOrderById = async (orderId, requestId) => {
   const order = await Order.findById(orderId);
 
@@ -199,11 +257,10 @@ const getOrderById = async (orderId, requestId) => {
   return order;
 };
 
-/**
- * getOrdersByUser
- */
 const getOrdersByUser = async (userId, requestId) => {
-  const orders = await Order.find({ userId }).sort({ createdAt: -1 }).limit(50);
+  const orders = await Order.find({ userId })
+    .sort({ createdAt: -1 })
+    .limit(50);
   return orders;
 };
 

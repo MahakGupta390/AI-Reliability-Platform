@@ -1,90 +1,112 @@
-
-
 /**
- * middleware/latency.middleware.js — Request latency measurement
+ * middleware/latency.middleware.js — Request latency measurement (auth-service)
  *
- * WHAT this does:
- * Measures the time from when a request arrives to when the response
- * is fully sent. Records this data to the in-memory metrics store
- * and logs a structured latency event for every request.
+ * WHAT CHANGED FROM PHASE 4/5:
+ * Added Prometheus instrument calls alongside existing metricsStore writes.
+ * Both recording mechanisms run on every request.
+ * metricsStore → used by custom /metrics JSON endpoint + future AI service
+ * Prometheus   → used by Prometheus server scraping /metrics text format
  *
- * HOW it works:
- * 1. Record start time when request arrives (before next() is called)
- * 2. Hook into res.on('finish') — fires AFTER response is sent to client
- * 3. Calculate latency = finish time - start time
- * 4. Write record to metricsStore
- * 5. Log structured latency event
- *
- * WHY res.on('finish') and not just after next():
- * next() returns immediately after passing control to the next middleware.
- * For async route handlers, the response hasn't been sent yet at that point.
- * The 'finish' event fires only when the response bytes have been flushed
- * to the socket — which is the true end of the request lifecycle.
- *
- * WHAT WE SKIP:
- * Health checks (/health) are excluded from metrics.
- * They're called every 30s by Docker/load balancers and would
- * flood your metrics with noise that has nothing to do with real traffic.
+ * THE res.on('finish') HOOK:
+ * Node.js HTTP response emits 'finish' after all response data has been
+ * flushed to the underlying socket. This is the correct measurement point
+ * for total request duration because it includes:
+ * - Time in all middleware
+ * - Time in route handlers
+ * - Time in async operations (DB queries, bcrypt hashing)
+ * - Time to serialize the response body
  */
 
 const { addRecord } = require('../config/metricsStore');
+const {
+  httpRequestsTotal,
+  httpErrorsTotal,
+  httpRequestDuration,
+  activeRequests,
+} = require('../config/prometheusMetrics');
 const logger = require('../config/logger');
 
-const SERVICE_NAME = process.env.SERVICE_NAME || 'service';
-
-// Endpoints to exclude from metrics tracking
+const SERVICE_NAME = process.env.SERVICE_NAME || 'auth-service';
 const EXCLUDED_PATHS = ['/health', '/favicon.ico'];
 
 const latencyMiddleware = (req, res, next) => {
-  // Skip excluded paths
-  if (EXCLUDED_PATHS.some((path) => req.path.startsWith(path))) {
+  if (EXCLUDED_PATHS.some((p) => req.path.startsWith(p))) {
     return next();
   }
 
-  // Record the exact moment this request arrived
-  // Date.now() is ms precision — sufficient for latency tracking
-  // For sub-ms precision you'd use process.hrtime.bigint()
   const startTime = Date.now();
 
-  // Hook: fires when response is fully sent to the client
+  // Normalize endpoint path for label — CRITICAL for Prometheus cardinality
+  // /auth/login → /auth/login (fine, static)
+  // We derive this at finish time using req.route to get pattern like /auth/:id
+  // For now capture originalUrl — will be normalized in finish handler
+  const method = req.method;
+
+  // Increment active requests gauge — tracks concurrent in-flight requests
+  // This increments BEFORE the request is processed
+  activeRequests.inc({ method, endpoint: req.originalUrl });
+
   res.on('finish', () => {
     const latencyMs = Date.now() - startTime;
+    const statusCode = res.statusCode;
 
-    // Normalize the endpoint path
-    // WHY: /orders/65a1b2c3... and /orders/65x9y8z7... are the same endpoint
-    // We want metrics grouped by route pattern, not specific IDs
-    // Express attaches the matched route to req.route
+    // Normalize endpoint to route pattern to avoid cardinality explosion
+    // req.route is set by Express after route matching
+    // req.baseUrl + req.route.path = "/auth" + "/login" = "/auth/login"
+    // Without normalization: /auth/65abc and /auth/65xyz = 2 time-series
+    // With normalization: both become /auth/:id = 1 time-series
     const endpoint = req.route
-      ? req.baseUrl + req.route.path   // e.g. "/orders/:id"
-      : req.originalUrl;               // fallback if route didn't match (404s)
+      ? req.baseUrl + req.route.path
+      : req.originalUrl;
 
-    const record = {
+    // ── EXISTING: metricsStore write (unchanged from Phase 4) ─────────────
+    addRecord({
       service: SERVICE_NAME,
       requestId: req.requestId,
-      method: req.method,
+      method,
       endpoint,
-      statusCode: res.statusCode,
+      statusCode,
       latencyMs,
       timestamp: new Date().toISOString(),
-    };
+    });
 
-    // Write to in-memory store for Phase 6 metrics aggregation
-    addRecord(record);
+    // ── NEW: Prometheus instrument calls ──────────────────────────────────
 
-    // Structured log — this is what Phase 5 will build on
-    // Every request produces exactly one latency log entry
-    const logLevel = res.statusCode >= 500 ? 'error'
-                   : res.statusCode >= 400 ? 'warn'
+    // Convert status code to string for label
+    // Prometheus labels must be strings
+    const statusCodeStr = String(statusCode);
+
+    // Counter: increment total requests
+    httpRequestsTotal.inc({ method, endpoint, statusCode: statusCodeStr });
+
+    // Counter: increment errors (4xx and 5xx only)
+    if (statusCode >= 400) {
+      httpErrorsTotal.inc({ method, endpoint, statusCode: statusCodeStr });
+    }
+
+    // Histogram: observe latency in SECONDS (Prometheus convention)
+    // We track ms internally but Prometheus expects seconds
+    httpRequestDuration.observe(
+      { method, endpoint, statusCode: statusCodeStr },
+      latencyMs / 1000
+    );
+
+    // Gauge: decrement active requests (request is now complete)
+    activeRequests.dec({ method, endpoint: req.originalUrl });
+
+    // ── EXISTING: structured logging (unchanged from Phase 5) ─────────────
+    const logLevel = statusCode >= 500 ? 'error'
+                   : statusCode >= 400 ? 'warn'
                    : 'info';
 
-    logger[logLevel]('Request completed', {
+    logger[logLevel]('← Completed', {
       service: SERVICE_NAME,
       requestId: req.requestId,
-      method: req.method,
+      method,
       endpoint,
-      statusCode: res.statusCode,
+      statusCode,
       latencyMs,
-      timestamp: record.timestamp,
+      timestamp: new Date().toISOString(),
     });
   });
 
