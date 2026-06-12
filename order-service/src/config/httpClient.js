@@ -107,5 +107,47 @@ const paymentClient = createServiceClient(
   process.env.PAYMENT_SERVICE_URL || 'http://localhost:3002',
   'payment-service'
 );
+const callWithRetry = async (
+  operation,
+  retries = 2,
+  delayMs = 200,
+  retryOnTimeout = false // Default to false for mutations like POST payment
+) => {
+  let lastError;
 
-module.exports = { authClient, paymentClient };
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      lastError = err;
+
+      // Only retry on timeout if explicitly marked safe (e.g., GET requests)
+      const isTimeout = err.code === 'ECONNABORTED';
+      const isNetworkError = !err.response;
+      const isConflict = err.response && err.response.status === 409;
+
+      // Do NOT retry if it's a 409 conflict
+      const shouldRetry = 
+        !isConflict && 
+        ((isTimeout && retryOnTimeout) || isNetworkError);
+
+      if (!shouldRetry) {
+        // If it's a timeout on a payment POST, break immediately 
+        // to let the error handler mark the order cleanly.
+        throw err;
+      }
+
+      if (attempt < retries) {
+        logger.info(`Retrying downstream call... Attempt ${attempt + 1}/${retries}`, {
+          service: SERVICE_NAME,
+          error: err.message
+        });
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  throw lastError;
+};
+
+module.exports = { authClient, paymentClient ,callWithRetry};

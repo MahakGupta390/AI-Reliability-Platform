@@ -95,6 +95,11 @@ const createOrder = async ({ token, items, shippingAddress, currency }, requestI
 
   } catch (err) {
     serviceLatencies.authService = Date.now() - authStart;
+    if (err.response) {
+      console.log("CRITICAL AUTH RESP DATA:", err.response.data);
+    } else {
+      console.log("CRITICAL AUTH ERR MSG:", err.message);
+    }
 
     // Record failed auth-service call
     const failStatus = err.isTimeout ? 'timeout'
@@ -165,7 +170,9 @@ const createOrder = async ({ token, items, shippingAddress, currency }, requestI
   const paymentStart = Date.now();
 
   try {
-    const paymentResponse = await paymentClient.post(
+    const paymentResponse = await callWithRetry(
+  () =>
+    paymentClient.post(
       '/payment',
       {
         orderId: order._id.toString(),
@@ -174,8 +181,15 @@ const createOrder = async ({ token, items, shippingAddress, currency }, requestI
         currency: currency || 'USD',
         method: 'card',
       },
-      { headers: { 'x-request-id': requestId } }
-    );
+      {
+        headers: {
+          'x-request-id': requestId,
+        },
+      }
+    ),
+  2,   // retry 2 times
+  200  // wait 200ms between retries
+);
 
     serviceLatencies.paymentService = Date.now() - paymentStart;
     serviceLatencies.totalMs = Date.now() - orderStart;
@@ -212,7 +226,40 @@ const createOrder = async ({ token, items, shippingAddress, currency }, requestI
     serviceLatencies.paymentService = Date.now() - paymentStart;
     serviceLatencies.totalMs = Date.now() - orderStart;
 
-    // Record failed payment-service call
+    // ─── FIX: Intercept Both 409 Conflict & Text Messages ───────
+    const upstreamMessage = err.response?.data?.message || err.message || '';
+    const isAlreadyProcessed = (err.response && err.response.status === 409) || 
+                               upstreamMessage.includes('Payment already processed');
+
+    if (isAlreadyProcessed) {
+      logger.info('Payment was already processed downstream. Recovering order to confirmed.', {
+        service: SERVICE_NAME,
+        requestId,
+        orderId: order._id,
+        upstreamMessage
+      });
+
+      // Safely extract the payment object if returned by your gateway
+      const payment = err.response.data?.data?.payment || err.response.data?.payment;
+
+      order.status = 'confirmed';
+      order.paymentId = payment?._id?.toString() || payment?.id?.toString() || 'ALREADY_PAID';
+      order.serviceLatencies = serviceLatencies;
+      await order.save();
+
+      // Record successful order metrics instead of failures
+      ordersTotal.inc({ status: 'confirmed' });
+      downstreamCallsTotal.inc({ target: 'payment-service', status: 'success' });
+      downstreamCallDuration.observe(
+        { target: 'payment-service', operation: 'process-payment' },
+        serviceLatencies.paymentService / 1000
+      );
+
+      return order; // Break out early with the successfully confirmed order!
+    }
+    // ───────────────────────────────────────────────────────────
+
+    // Record failed payment-service call (Your original fallback logic)
     const failStatus = err.isTimeout ? 'timeout'
                      : err.isUnreachable ? 'unreachable'
                      : 'error';
@@ -244,7 +291,6 @@ const createOrder = async ({ token, items, shippingAddress, currency }, requestI
     throw buildServiceError(err, 'Payment processing failed', 402);
   }
 };
-
 const getOrderById = async (orderId, requestId) => {
   const order = await Order.findById(orderId);
 

@@ -1,0 +1,26 @@
+# grafana/provisioning/dashboards/dashboard.yml
+#
+# Tells Grafana where to find dashboard JSON files and
+# how to handle updates to those files.
+#
+# updateIntervalSeconds: 30 means Grafana checks for
+# changed/new JSON files every 30 seconds while running.
+# Drop a new JSON file in the folder → appears in Grafana in 30s.
+#
+# allowUiUpdates: false means dashboards cannot be edited
+# via the Grafana UI. Changes must come from JSON files.
+# This enforces version control discipline — all dashboard
+# changes go through git, not manual UI edits.
+
+apiVersion: 1
+
+providers:
+  - name: 'AI Reliability Platform'
+    orgId: 1
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,26 @@
+# grafana/provisioning/alerting/notification-policies.yml
+#
+# Routes alert instances to contact points based on labels.
+# The default policy routes everything to default-receiver.
+# Add specific routes for severity-based routing.
+
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: default-receiver
+    group_by: ['service', 'severity']
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      - receiver: default-receiver
+        matchers:
+          - severity = critical
+        group_wait: 10s
+        repeat_interval: 1h
+      - receiver: default-receiver
+        matchers:
+          - severity = high
+        group_wait: 30s
+        repeat_interval: 2h

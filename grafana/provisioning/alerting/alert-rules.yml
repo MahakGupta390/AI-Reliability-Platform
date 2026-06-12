@@ -1,0 +1,222 @@
+# grafana/provisioning/alerting/alert-rules.yml
+#
+# Grafana Unified Alerting rules provisioned automatically at startup.
+#
+# HOW GRAFANA ALERTS WORK:
+# 1. Grafana evaluates each rule on its defined interval
+# 2. It runs the PromQL query against Prometheus
+# 3. If the result crosses the threshold for the entire "for" duration → FIRING
+# 4. Alert is routed to the contact point (Slack, email, PagerDuty)
+#
+# WHY "for" duration matters:
+# A single spike to 15% error rate for 1 second is noise.
+# 15% error rate sustained for 2 minutes is a real incident.
+# The "for" field prevents false positives from transient spikes.
+#
+# ALERT STATES:
+# Normal   → query result is below threshold
+# Pending  → threshold crossed but "for" duration not yet elapsed
+# Firing   → threshold crossed AND sustained for full "for" duration
+# NoData   → query returns no data (service may be down)
+# Error    → alert evaluation itself errored
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: AI Reliability Platform — Service Health
+    folder: AI Reliability Platform
+    interval: 1m
+    rules:
+
+      # ── RULE 1: Payment Service P99 High ───────────────────────────────────
+      # Fires when payment-service P99 latency exceeds 2 seconds for 5 minutes.
+      #
+      # WHY 2000ms threshold:
+      # Payment gateways naturally take 100–400ms. 2000ms means something
+      # is seriously wrong — 5–10x above normal.
+      #
+      # WHY 5 minute "for":
+      # Prevents alert fatigue from occasional slow payment gateway calls.
+      # Sustained 2s+ means structural problem, not a one-off.
+      - uid: alert-payment-p99-high
+        title: Payment Service P99 Latency High
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus-main
+            model:
+              expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="payment-service"}[5m])) by (le)) * 1000
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [2000], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              refId: C
+              type: threshold
+        noDataState: NoData
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: "payment-service P99 latency is above 2000ms"
+          description: "payment-service P99 has been above 2000ms for 5 minutes. Current value: {{ $values.A.Value }}ms. Check payment gateway connectivity and MongoDB pool size."
+          runbook: "1. Check payment-service logs: tail -f payment-service/logs/error.log\n2. Verify MongoDB connection: db.adminCommand({serverStatus:1}).connections\n3. Check FAILURE_RATE and HIGH_LATENCY env vars"
+        labels:
+          severity: high
+          service: payment-service
+          team: payments
+
+      # ── RULE 2: Error Rate High (Any Service) ──────────────────────────────
+      # Fires when any service error rate exceeds 10% for 2 minutes.
+      #
+      # WHY 10% threshold:
+      # Normal error rate from invalid inputs is 0.5–2%.
+      # 10% means 1 in 10 real user requests is failing — unacceptable.
+      #
+      # WHY 2 minute "for":
+      # Error rate spikes fast during incidents. 2 minutes is enough to
+      # confirm it's real without waiting too long to alert.
+      - uid: alert-error-rate-high
+        title: High Error Rate Detected
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus-main
+            model:
+              expr: sum(rate(http_errors_total[5m])) by (service) / sum(rate(http_requests_total[5m])) by (service) * 100
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [10], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              refId: C
+              type: threshold
+        noDataState: NoData
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: "Error rate above 10% on {{ $labels.service }}"
+          description: "{{ $labels.service }} error rate has been above 10% for 2 minutes. Current rate: {{ $values.A.Value }}%. This means more than 1 in 10 user requests are failing."
+          runbook: "1. Check service logs for error patterns\n2. Verify downstream dependencies are healthy\n3. Check failure simulation env vars (FAILURE_RATE)"
+        labels:
+          severity: high
+          team: platform
+
+      # ── RULE 3: Service Down ───────────────────────────────────────────────
+      # Fires when Prometheus cannot scrape a service (up == 0).
+      #
+      # WHY this is different from error rate:
+      # When a service is completely down, there are no requests, so
+      # error rate stays at 0% (no requests = no errors to count).
+      # The "up" metric is the only way to detect complete outages.
+      #
+      # WHY 1 minute "for":
+      # A restart takes 10–30 seconds. 1 minute confirms it's not
+      # coming back on its own and needs human intervention.
+      - uid: alert-service-down
+        title: Service Down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus-main
+            model:
+              expr: up{job=~"auth-service|payment-service|order-service"}
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [1], type: lt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              refId: C
+              type: threshold
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 1m
+        annotations:
+          summary: "{{ $labels.job }} is DOWN"
+          description: "Prometheus cannot reach {{ $labels.job }}. The service has been unreachable for 1 minute. All requests to this service are failing."
+          runbook: "1. Check container status: docker ps | grep {{ $labels.job }}\n2. Check container logs: docker logs {{ $labels.job }}\n3. Verify MongoDB connection in service startup logs\n4. Restart if needed: docker restart {{ $labels.job }}"
+        labels:
+          severity: critical
+          team: platform
+
+      # ── RULE 4: Request Rate Drop ──────────────────────────────────────────
+      # Fires when request rate drops more than 80% from the 1-hour average.
+      # Detects silent failures where service appears up but receives no traffic.
+      #
+      # WHY traffic drop is an incident:
+      # If load balancer stops routing to a service, error rate stays 0%
+      # and the service appears healthy — but no users can reach it.
+      # A traffic drop of 80% from baseline means something upstream broke.
+      #
+      # QUERY EXPLANATION:
+      # Current rate / historical rate * 100 < 20
+      # = current traffic is less than 20% of 1-hour average
+      - uid: alert-request-rate-drop
+        title: Unexpected Request Rate Drop
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus-main
+            model:
+              expr: sum(rate(http_requests_total[5m])) by (service) / sum(rate(http_requests_total[1h] offset 5m)) by (service) * 100
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [20], type: lt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              refId: C
+              type: threshold
+        noDataState: NoData
+        execErrState: Error
+        for: 3m
+        annotations:
+          summary: "Request rate on {{ $labels.service }} dropped more than 80%"
+          description: "{{ $labels.service }} is receiving less than 20% of its normal traffic for 3 minutes. This may indicate a routing issue, upstream failure, or service degradation preventing request completion."
+          runbook: "1. Check if service is receiving connections: netstat or docker stats\n2. Check upstream load balancer or API gateway\n3. Verify service health endpoint: curl http://localhost:<port>/health\n4. Check for silent errors in access logs"
+        labels:
+          severity: medium
+          team: platform

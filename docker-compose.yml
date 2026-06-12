@@ -1,6 +1,5 @@
 version: "3.9"
 
-# ── SERVICES ──────────────────────────────────────────────────────────────────
 services:
 
   # ── MongoDB ──────────────────────────────────────────────────────────────────
@@ -124,22 +123,9 @@ services:
         condition: service_healthy
 
   # ── Prometheus ────────────────────────────────────────────────────────────────
-  # Prometheus scrapes metrics from all 3 services every 15 seconds
-  # and stores them as time-series data.
-  #
-  # WHY prometheus_data volume:
-  # Without a named volume, all scraped metrics are lost when the
-  # Prometheus container restarts. A named volume persists data across
-  # restarts — this is what gives you historical metrics queryability.
-  #
-  # WHY mount prometheus.yml as read-only (:ro):
-  # Prometheus only needs to READ its config. :ro prevents accidental
-  # writes and makes clear this file is configuration, not state.
-  #
-  # WHY depends_on the services:
-  # Prometheus can start before services are ready — it will show
-  # targets as DOWN and retry. But starting after services are healthy
-  # means the first scrape has data immediately.
+  # Scrapes metrics from all 3 services every 15 seconds.
+  # Stores time-series data in prometheus_data volume.
+  # UI available at http://localhost:9090
   prometheus:
     image: prom/prometheus:v2.48.0
     container_name: prometheus
@@ -147,19 +133,13 @@ services:
     ports:
       - "9090:9090"
     command:
-      # Default storage retention: 15 days
-      # Increase for longer history at the cost of disk space
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--storage.tsdb.retention.time=15d'
-      # Enable hot-reload via HTTP POST to /-/reload
       - '--web.enable-lifecycle'
-      # Enable admin API for data deletion/snapshotting
       - '--web.enable-admin-api'
     volumes:
-      # Mount our prometheus.yml config (read-only)
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      # Named volume for persistent time-series storage
       - prometheus_data:/prometheus
     networks:
       - reliability-net
@@ -171,18 +151,88 @@ services:
       order-service:
         condition: service_healthy
 
+  # ── Grafana ───────────────────────────────────────────────────────────────────
+  # Visualization layer on top of Prometheus.
+  # Dashboards and datasources are provisioned automatically from files.
+  # UI available at http://localhost:3000
+  # Login: admin / admin (change on first login)
+  #
+  # WHY these environment variables:
+  #
+  # GF_SECURITY_ADMIN_PASSWORD
+  #   Sets the initial admin password. Change this in production.
+  #   Using a variable so you can override via .env file.
+  #
+  # GF_USERS_ALLOW_SIGN_UP=false
+  #   Disables public self-registration. Only admin can create users.
+  #
+  # GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+  #   Sets the System Overview as the first thing you see on login.
+  #   Without this, Grafana shows the default welcome screen.
+  #
+  # GF_ALERTING_ENABLED=false + GF_UNIFIED_ALERTING_ENABLED=true
+  #   Disables legacy alerting, enables unified alerting (current standard).
+  #   Unified alerting is what our alert-rules.yml uses.
+  #
+  # GF_FEATURE_TOGGLES_ENABLE=ngalert
+  #   Enables next-generation alerting features needed for provisioned rules.
+  #
+  # GF_LOG_LEVEL=warn
+  #   Reduces Grafana's own log noise in Docker logs.
+  #   Use 'info' or 'debug' when troubleshooting Grafana itself.
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Admin credentials
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      # Disable public signup
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Set default home dashboard
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/system-overview.json
+      # Unified alerting (required for provisioned alert rules)
+      GF_ALERTING_ENABLED: "false"
+      GF_UNIFIED_ALERTING_ENABLED: "true"
+      # Reduce log noise
+      GF_LOG_LEVEL: warn
+      # Allow loading unsigned plugins if needed in future
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: ""
+      # Server settings
+      GF_SERVER_HTTP_PORT: 3000
+      GF_SERVER_DOMAIN: localhost
+      # Anonymous access disabled
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      # Provisioning directory — datasources, dashboards, alerts
+      # :ro = read-only, Grafana cannot modify these config files
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      # Named volume for Grafana's own state — user preferences,
+      # manually created dashboards (if any), plugin data
+      # Without this, every restart resets Grafana completely
+      - grafana_data:/var/lib/grafana
+    networks:
+      - reliability-net
+    depends_on:
+      - prometheus
+
 # ── VOLUMES ────────────────────────────────────────────────────────────────────
 volumes:
   mongo_data:
     driver: local
-  # Prometheus time-series data survives container restarts
   prometheus_data:
+    driver: local
+  # Grafana's internal state: user sessions, plugin data, custom dashboards
+  grafana_data:
     driver: local
 
 # ── NETWORKS ──────────────────────────────────────────────────────────────────
-# All containers on this network can reach each other by service name.
-# From Prometheus container: auth-service is at http://auth-service:3001
-# From host machine: auth-service is at http://localhost:3001
+# All containers communicate by service name on this network.
+# Grafana → Prometheus: http://prometheus:9090
+# Prometheus → services: http://auth-service:3001, etc.
 networks:
   reliability-net:
     driver: bridge

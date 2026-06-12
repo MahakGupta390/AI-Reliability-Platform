@@ -1,0 +1,29 @@
+# grafana/provisioning/datasources/prometheus.yml
+#
+# Automatically provisions the Prometheus datasource in Grafana.
+# Grafana reads this file at startup and creates the datasource
+# without any manual UI interaction.
+#
+# IMPORTANT: The uid field must match the datasource uid used
+# in all dashboard JSON files. If they don't match, panels
+# show "Datasource not found" errors.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus-main
+    access: proxy
+    # Inside Docker network, Grafana reaches Prometheus by container name
+    # NOT localhost:9090 — that would be Grafana's own localhost
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false   # Prevent accidental changes via UI
+    jsonData:
+      # How far back to query by default in Grafana panels
+      timeInterval: '15s'
+      # Match Prometheus scrape interval — prevents empty data points
+      queryTimeout: '60s'
+      # Enable HTTP method POST for large queries
+      httpMethod: POST
