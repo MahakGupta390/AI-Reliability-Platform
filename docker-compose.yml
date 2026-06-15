@@ -20,6 +20,45 @@ services:
       retries: 5
       start_period: 20s
 
+  # ── Redis ─────────────────────────────────────────────────────────────────────
+  # BullMQ uses Redis as its job storage backend.
+  # All pending, active, completed, and failed jobs are stored here.
+  #
+  # WHY redis_data volume:
+  # Without persistence, jobs in the queue are lost when Redis restarts.
+  # With --appendonly yes, Redis writes every operation to disk.
+  # On restart, Redis replays the log to restore state.
+  # This means an order queued before a Redis restart will still be
+  # processed after Redis comes back — no lost work.
+  #
+  # WHY maxmemory-policy allkeys-lru:
+  # If Redis runs out of memory, it evicts least-recently-used keys.
+  # This prevents Redis from crashing due to memory exhaustion.
+  # For production, set maxmemory to a specific limit (e.g., 256mb).
+  #
+  # PORTS: 6379 exposed to host for debugging with Redis CLI or RedisInsight.
+  redis:
+    image: redis:7.2-alpine
+    container_name: reliability-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - reliability-net
+    healthcheck:
+      test: redis-cli ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   # ── auth-service ──────────────────────────────────────────────────────────────
   auth-service:
     build:
@@ -89,6 +128,8 @@ services:
       start_period: 10s
 
   # ── order-service ─────────────────────────────────────────────────────────────
+  # order-service now depends on Redis for BullMQ queue operations.
+  # REDIS_URL uses the container name for Docker internal networking.
   order-service:
     build:
       context: ./order-service
@@ -105,6 +146,10 @@ services:
       AUTH_SERVICE_URL: http://auth-service:3001
       PAYMENT_SERVICE_URL: http://payment-service:3002
       SERVICE_TIMEOUT_MS: 5000
+      # Redis connection for BullMQ
+      REDIS_URL: redis://redis:6379
+      # Worker concurrency — how many jobs to process simultaneously
+      WORKER_CONCURRENCY: 5
       LOG_LEVEL: info
       HIGH_LATENCY: ${HIGH_LATENCY:-false}
       LATENCY_MS: ${LATENCY_MS:-0}
@@ -121,11 +166,10 @@ services:
         condition: service_healthy
       payment-service:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
   # ── Prometheus ────────────────────────────────────────────────────────────────
-  # Scrapes metrics from all 3 services every 15 seconds.
-  # Stores time-series data in prometheus_data volume.
-  # UI available at http://localhost:9090
   prometheus:
     image: prom/prometheus:v2.48.0
     container_name: prometheus
@@ -152,34 +196,6 @@ services:
         condition: service_healthy
 
   # ── Grafana ───────────────────────────────────────────────────────────────────
-  # Visualization layer on top of Prometheus.
-  # Dashboards and datasources are provisioned automatically from files.
-  # UI available at http://localhost:3000
-  # Login: admin / admin (change on first login)
-  #
-  # WHY these environment variables:
-  #
-  # GF_SECURITY_ADMIN_PASSWORD
-  #   Sets the initial admin password. Change this in production.
-  #   Using a variable so you can override via .env file.
-  #
-  # GF_USERS_ALLOW_SIGN_UP=false
-  #   Disables public self-registration. Only admin can create users.
-  #
-  # GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
-  #   Sets the System Overview as the first thing you see on login.
-  #   Without this, Grafana shows the default welcome screen.
-  #
-  # GF_ALERTING_ENABLED=false + GF_UNIFIED_ALERTING_ENABLED=true
-  #   Disables legacy alerting, enables unified alerting (current standard).
-  #   Unified alerting is what our alert-rules.yml uses.
-  #
-  # GF_FEATURE_TOGGLES_ENABLE=ngalert
-  #   Enables next-generation alerting features needed for provisioned rules.
-  #
-  # GF_LOG_LEVEL=warn
-  #   Reduces Grafana's own log noise in Docker logs.
-  #   Use 'info' or 'debug' when troubleshooting Grafana itself.
   grafana:
     image: grafana/grafana:10.2.0
     container_name: grafana
@@ -187,32 +203,16 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Admin credentials
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
-      # Disable public signup
       GF_USERS_ALLOW_SIGN_UP: "false"
-      # Set default home dashboard
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/system-overview.json
-      # Unified alerting (required for provisioned alert rules)
       GF_ALERTING_ENABLED: "false"
       GF_UNIFIED_ALERTING_ENABLED: "true"
-      # Reduce log noise
       GF_LOG_LEVEL: warn
-      # Allow loading unsigned plugins if needed in future
-      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: ""
-      # Server settings
-      GF_SERVER_HTTP_PORT: 3000
-      GF_SERVER_DOMAIN: localhost
-      # Anonymous access disabled
       GF_AUTH_ANONYMOUS_ENABLED: "false"
     volumes:
-      # Provisioning directory — datasources, dashboards, alerts
-      # :ro = read-only, Grafana cannot modify these config files
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      # Named volume for Grafana's own state — user preferences,
-      # manually created dashboards (if any), plugin data
-      # Without this, every restart resets Grafana completely
       - grafana_data:/var/lib/grafana
     networks:
       - reliability-net
@@ -223,16 +223,15 @@ services:
 volumes:
   mongo_data:
     driver: local
+  # Redis AOF persistence — jobs survive Redis restarts
+  redis_data:
+    driver: local
   prometheus_data:
     driver: local
-  # Grafana's internal state: user sessions, plugin data, custom dashboards
   grafana_data:
     driver: local
 
 # ── NETWORKS ──────────────────────────────────────────────────────────────────
-# All containers communicate by service name on this network.
-# Grafana → Prometheus: http://prometheus:9090
-# Prometheus → services: http://auth-service:3001, etc.
 networks:
   reliability-net:
     driver: bridge

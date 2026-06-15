@@ -1,10 +1,9 @@
 /**
  * config/prometheusMetrics.js — Prometheus metric definitions (order-service)
  *
- * Order service has additional metrics for distributed call tracking:
- * - Downstream service call duration (auth-service calls, payment-service calls)
- * - Order outcomes by status
- * - serviceLatencies histogram (the key data from Phase 2)
+ * CHANGES FROM PHASE 9A:
+ * Added queue-specific gauges that BullMQ metrics are reported against.
+ * These are updated periodically by a background interval in app.js.
  */
 
 const client = require('prom-client');
@@ -17,7 +16,7 @@ register.setDefaultLabels({
 
 client.collectDefaultMetrics({ register });
 
-// ── COUNTERS ──────────────────────────────────────────────────────────────────
+// ── HTTP COUNTERS ─────────────────────────────────────────────────────────────
 
 const httpRequestsTotal = new client.Counter({
   name: 'http_requests_total',
@@ -33,12 +32,6 @@ const httpErrorsTotal = new client.Counter({
   registers: [register],
 });
 
-/**
- * ordersTotal
- * Tracks order outcomes by final status.
- * Labels: status (confirmed/failed/cancelled)
- * Critical business metric — directly measures revenue-affecting failures.
- */
 const ordersTotal = new client.Counter({
   name: 'orders_total',
   help: 'Total number of orders by final status',
@@ -46,12 +39,6 @@ const ordersTotal = new client.Counter({
   registers: [register],
 });
 
-/**
- * downstreamCallsTotal
- * Tracks every outbound call to auth-service and payment-service.
- * Labels: target (auth-service/payment-service), status (success/timeout/error)
- * Key for understanding cascade failures.
- */
 const downstreamCallsTotal = new client.Counter({
   name: 'downstream_calls_total',
   help: 'Total outbound calls to downstream services',
@@ -59,7 +46,7 @@ const downstreamCallsTotal = new client.Counter({
   registers: [register],
 });
 
-// ── HISTOGRAMS ────────────────────────────────────────────────────────────────
+// ── HTTP HISTOGRAMS ───────────────────────────────────────────────────────────
 
 const httpRequestDuration = new client.Histogram({
   name: 'http_request_duration_seconds',
@@ -69,17 +56,6 @@ const httpRequestDuration = new client.Histogram({
   registers: [register],
 });
 
-/**
- * downstreamCallDuration
- * Measures latency of each downstream service call individually.
- * This is the Prometheus version of the serviceLatencies field.
- * Labels: target (which service), operation (verify/process-payment)
- *
- * KEY METRIC for root cause analysis:
- * histogram_quantile(0.99, downstream_call_duration_seconds_bucket{target="payment-service"})
- * → P99 of payment-service calls specifically
- * If this spikes, payment-service is the root cause of order slowness.
- */
 const downstreamCallDuration = new client.Histogram({
   name: 'downstream_call_duration_seconds',
   help: 'Duration of outbound calls to downstream services',
@@ -113,6 +89,47 @@ serviceInfo.set(
   1
 );
 
+// ── QUEUE GAUGES (NEW in Phase 9C) ────────────────────────────────────────────
+// These track BullMQ queue depth per state.
+// Updated every 15 seconds by a background interval in app.js.
+//
+// WHY gauges not counters:
+// Queue depth can go up AND down (jobs are added and removed).
+// Gauges represent current state values, counters only go up.
+//
+// OPERATIONAL SIGNIFICANCE:
+// queue_jobs_waiting > 50 = worker can't keep up with demand
+// queue_jobs_active  = 0  = worker may be down or idle
+// queue_jobs_failed  growing = systematic processing failures
+
+const queueJobsWaiting = new client.Gauge({
+  name: 'queue_jobs_waiting',
+  help: 'Number of jobs waiting to be processed in BullMQ queue',
+  labelNames: ['queue'],
+  registers: [register],
+});
+
+const queueJobsActive = new client.Gauge({
+  name: 'queue_jobs_active',
+  help: 'Number of jobs currently being processed by workers',
+  labelNames: ['queue'],
+  registers: [register],
+});
+
+const queueJobsCompleted = new client.Gauge({
+  name: 'queue_jobs_completed',
+  help: 'Number of completed jobs in BullMQ (rolling window)',
+  labelNames: ['queue'],
+  registers: [register],
+});
+
+const queueJobsFailed = new client.Gauge({
+  name: 'queue_jobs_failed',
+  help: 'Number of failed jobs in BullMQ (rolling window)',
+  labelNames: ['queue'],
+  registers: [register],
+});
+
 module.exports = {
   register,
   httpRequestsTotal,
@@ -122,4 +139,8 @@ module.exports = {
   ordersTotal,
   downstreamCallsTotal,
   downstreamCallDuration,
+  queueJobsWaiting,
+  queueJobsActive,
+  queueJobsCompleted,
+  queueJobsFailed,
 };
