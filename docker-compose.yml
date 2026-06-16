@@ -2,7 +2,6 @@ version: "3.9"
 
 services:
 
-  # ── MongoDB ──────────────────────────────────────────────────────────────────
   mongodb:
     image: mongo:7.0
     container_name: reliability-mongo
@@ -20,23 +19,6 @@ services:
       retries: 5
       start_period: 20s
 
-  # ── Redis ─────────────────────────────────────────────────────────────────────
-  # BullMQ uses Redis as its job storage backend.
-  # All pending, active, completed, and failed jobs are stored here.
-  #
-  # WHY redis_data volume:
-  # Without persistence, jobs in the queue are lost when Redis restarts.
-  # With --appendonly yes, Redis writes every operation to disk.
-  # On restart, Redis replays the log to restore state.
-  # This means an order queued before a Redis restart will still be
-  # processed after Redis comes back — no lost work.
-  #
-  # WHY maxmemory-policy allkeys-lru:
-  # If Redis runs out of memory, it evicts least-recently-used keys.
-  # This prevents Redis from crashing due to memory exhaustion.
-  # For production, set maxmemory to a specific limit (e.g., 256mb).
-  #
-  # PORTS: 6379 exposed to host for debugging with Redis CLI or RedisInsight.
   redis:
     image: redis:7.2-alpine
     container_name: reliability-redis
@@ -59,7 +41,6 @@ services:
       retries: 5
       start_period: 5s
 
-  # ── auth-service ──────────────────────────────────────────────────────────────
   auth-service:
     build:
       context: ./auth-service
@@ -94,7 +75,6 @@ services:
       retries: 3
       start_period: 10s
 
-  # ── payment-service ───────────────────────────────────────────────────────────
   payment-service:
     build:
       context: ./payment-service
@@ -127,9 +107,6 @@ services:
       retries: 3
       start_period: 10s
 
-  # ── order-service ─────────────────────────────────────────────────────────────
-  # order-service now depends on Redis for BullMQ queue operations.
-  # REDIS_URL uses the container name for Docker internal networking.
   order-service:
     build:
       context: ./order-service
@@ -146,9 +123,7 @@ services:
       AUTH_SERVICE_URL: http://auth-service:3001
       PAYMENT_SERVICE_URL: http://payment-service:3002
       SERVICE_TIMEOUT_MS: 5000
-      # Redis connection for BullMQ
       REDIS_URL: redis://redis:6379
-      # Worker concurrency — how many jobs to process simultaneously
       WORKER_CONCURRENCY: 5
       LOG_LEVEL: info
       HIGH_LATENCY: ${HIGH_LATENCY:-false}
@@ -169,7 +144,6 @@ services:
       redis:
         condition: service_healthy
 
-  # ── Prometheus ────────────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.48.0
     container_name: prometheus
@@ -195,7 +169,6 @@ services:
       order-service:
         condition: service_healthy
 
-  # ── Grafana ───────────────────────────────────────────────────────────────────
   grafana:
     image: grafana/grafana:10.2.0
     container_name: grafana
@@ -219,11 +192,53 @@ services:
     depends_on:
       - prometheus
 
-# ── VOLUMES ────────────────────────────────────────────────────────────────────
+  # ── ai-service ────────────────────────────────────────────────────────────────
+  # Statistical anomaly detection engine.
+  # Polls Prometheus every 10 seconds, computes Z-scores, creates/resolves
+  # incident documents in MongoDB automatically.
+  # No webhooks — pure polling architecture.
+  # UI: GET /incidents, GET /incidents/open, GET /analysis
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: ai-service
+    restart: unless-stopped
+    ports:
+      - "3004:3004"
+    environment:
+      PORT: 3004
+      SERVICE_NAME: ai-service
+      NODE_ENV: production
+      # MongoDB — dedicated database for incident storage
+      MONGO_URI: mongodb://mongodb:27017/ai_db
+      # Prometheus URL — must use container name inside Docker network
+      PROMETHEUS_URL: http://prometheus:9090
+      # How often to poll Prometheus (milliseconds)
+      # 10000 = every 10 seconds
+      POLL_INTERVAL_MS: 10000
+      # Z-score threshold to create an incident
+      # 3.0 = 3 standard deviations above baseline
+      # Probability of false positive at this level: 0.13%
+      Z_SCORE_TRIGGER: "3.0"
+      # Z-score threshold to auto-resolve an incident
+      # 1.5 = 1.5 standard deviations — well within normal range
+      # Hysteresis gap (1.5 to 3.0) prevents flapping
+      Z_SCORE_RESOLVE: "1.5"
+      LOG_LEVEL: info
+    volumes:
+      - ./ai-service/logs:/app/logs
+    networks:
+      - reliability-net
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+
 volumes:
   mongo_data:
     driver: local
-  # Redis AOF persistence — jobs survive Redis restarts
   redis_data:
     driver: local
   prometheus_data:
@@ -231,7 +246,6 @@ volumes:
   grafana_data:
     driver: local
 
-# ── NETWORKS ──────────────────────────────────────────────────────────────────
 networks:
   reliability-net:
     driver: bridge
