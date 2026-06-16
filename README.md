@@ -46,9 +46,9 @@ graph TD
     style Telemetry Layer fill:#1f1f1f,stroke:#333,stroke-width:2px,color:#fff
     style Payment fill:#a32a2a,stroke:#ff5555,stroke-width:1px,color:#fff
     style AI fill:#1a5f7a,stroke:#57c5b6,stroke-width:1px,color:#fff
-    ```
+```
 
-    ## 📊 Live Telemetry & Incident Logs
+## 📊 Live Telemetry & Incident Logs
 
 > [!NOTE]
 > Below is the diagnostic state captured when a $40\%$ artificial fault rate was injected into the payment isolation zone while under a $60\text{-order}$ bulk traffic load loop.
