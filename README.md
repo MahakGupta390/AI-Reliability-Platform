@@ -2273,66 +2273,10 @@ graph TD
     style Telemetry Layer fill:#1f1f1f,stroke:#333,stroke-width:2px,color:#fff
     style Payment fill:#a32a2a,stroke:#ff5555,stroke-width:1px,color:#fff
     style AI fill:#1a5f7a,stroke:#57c5b6,stroke-width:1px,color:#fff
-📊 Live Telemetry & Incident Logs
-[!NOTE]
-Below is the diagnostic state captured when a 40% artificial fault rate was injected into the payment isolation zone while under a 60-order bulk traffic load loop.
+## 📊 Live Telemetry & Incident Logs
 
-🔴 Metrics Outage Spike & Automated Detection
-Telemetry Proof: The visualization shows order-service and auth-service P99 latencies shifting upwards and plateauing at 453ms under high-concurrency pressure, followed by a graceful drop to baseline once the queue cleared.
-
-Cascading Failure Visibility: Due to synchronous dependencies on the identity ingress check, the downstream failure caused transit socket exhaustion that surfaced an error rate spike up to 72% within the metrics monitoring pipeline.
-
-🏗️ Core Architectural Components
-Ingress Layer (Order Service): Exposes high-throughput API endpoints to accept client payloads, routing them through identity validation before staging.
-
-Decoupling Layer (Redis & BullMQ): Acts as a durable, memory-backed message broker to throttle order fulfillment and protect internal systems from dropping states during unexpected traffic floods.
-
-Worker Pool (Payment Service): Consumes event queue jobs asynchronously. Includes an integrated simulation hook to alter application stability profiles dynamically via environment runtime configurations (FAILURE_RATE=0.40).
-
-Telemetry Engine (AI Service): Runs continuous tracking routines directly against Prometheus databases. Evaluates sliding time-windows to compute real-time standard deviation metrics over incoming cluster updates.
-
-📡 Observability Framework
-Every container in the cluster exposes continuous telemetry counters to map active service profiles:
-
-Prometheus Engine: Regularly scrapes service /metrics handlers across a sliding 2-minute context.
-
-Grafana Dashboards: Aggregates time-series queries to generate production panels tracking request volume rates, error rate percentages, and P99 latency variances.
-
-🚀 Local Replication & Simulation Testing
-To recreate the cluster layout and execute the load validation suite on your local device, run this sequence:
-
-1. Boot up the Container Network
-Bash
-# Initialize and background the isolated container network configuration
-docker compose up -d
-2. Inject Runtime Failure Conditions
-Bash
-# Push the payment worker container into an intentional 40% failure mode
-set FAILURE_RATE=0.40&& docker compose up -d payment-service
-3. Generate High-Volume Traffic Flood
-DOS
-# Execute a 60-order automated sequence to saturate internal service loops
-for /L %i in (1,1,60) do (curl -s -X POST http://localhost:3003/orders -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjZhMzBmYWQ4ZDI4NjAyNDIwNGU3Nzk4NiIsImlhdCI6MTc4MTU5NDg0MSwiZXhwIjoxNzgyMTk5NjQxfQ.G9vHbcYnzkOufRi3N6oUmEXMQKuck5YoBeqx5Mz72Tk" -H "Content-Type: application/json" -d "{\"items\":[{\"productId\":\"sim-%i\",\"name\":\"Error Test\",\"quantity\":1,\"price\":99}]}" > null & echo [Order %i/60] Processing... & timeout /t 1 > null)
-4. Fetch Formatted Incident Diagnostic Logs
-Bash
-# Query the incident storage layer through the automated format interface
-curl -s http://localhost:3004/incidents | python -m json.tool
-
----
-
-### 🚀 Step 2: Push It Live!
-
-Save the file in VS Code, open your command window terminal (`cmd`), and run these lines to overwrite the broken layout on GitHub with the clean version:
-
-```cmd
-git add README.md
-git commit -m "docs: correct line formatting and isolate block syntax elements"
-git push origin main
-it comes smooth architecture but how to add this 📊 Live Telemetry & Incident Logs
-
-[!NOTE]
-
-Below is the diagnostic state captured when a $40\%$ artificial fault rate was injected into the payment isolation zone while under a $60\text{-order}$ bulk traffic load loop.
+> [!NOTE]
+> Below is the diagnostic state captured when a $40\%$ artificial fault rate was injected into the payment isolation zone while under a $60\text{-order}$ bulk traffic load loop.
 
 🔴 Metrics Outage Spike & Automated Detection
 
