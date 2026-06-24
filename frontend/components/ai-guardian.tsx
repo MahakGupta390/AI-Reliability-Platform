@@ -1,65 +1,25 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// components/ai-guardian.tsx   [MODIFIED]
+//
+// CHANGES:
+//   1. Removed hardcoded INSIGHTS array
+//   2. Now uses useInsights() hook → polls /api/incidents?mode=insights every 10s
+//   3. criticalCount, warnCount derived from live data
+//   4. InsightSkeleton shown on first load
+//   5. ErrorBanner shown if AI service is unreachable
+//   6. downIds prop kept — used to re-trigger scan animation on real incidents
+// ─────────────────────────────────────────────────────────────────────────────
+
 "use client"
 
 import { cn } from "@/lib/utils"
-import {
-  Brain,
-  TrendingUp,
-  ShieldAlert,
-  Lightbulb,
-  ChevronRight,
-  Zap,
-} from "lucide-react"
+import { Brain, TrendingUp, ShieldAlert, Lightbulb, ChevronRight, Zap } from "lucide-react"
 import { useEffect, useState } from "react"
+import { useInsights } from "@/lib/hooks/useIncidents"    // CHANGED: new hook
+import { InsightSkeleton, ErrorBanner } from "@/components/skeletons"
+import type { NormalisedIncident } from "@/lib/types"
 
-type InsightSeverity = "critical" | "warn" | "info" | "opportunity"
-
-type Insight = {
-  id: string
-  type: InsightSeverity
-  title: string
-  body: string
-  confidence: number   // 0-100
-  service: string
-  eta?: string
-}
-
-const INSIGHTS: Insight[] = [
-  {
-    id: "i1",
-    type: "critical",
-    title: "Cascade Risk: Payment → Order",
-    body: "Payment Gateway P99 trending +38% over 15 min. If latency exceeds 350ms threshold, Order Processor queue depth will saturate within ~8 min.",
-    confidence: 91,
-    service: "payment-gateway",
-    eta: "~8 min",
-  },
-  {
-    id: "i2",
-    type: "warn",
-    title: "Auth Service Memory Leak Pattern",
-    body: "Heap usage growing at 14MB/hr — matches signature of JWT cache eviction bug (CVE-internal-2024-041). Recommend rolling restart within 2h.",
-    confidence: 76,
-    service: "auth-service",
-    eta: "~2h",
-  },
-  {
-    id: "i3",
-    type: "opportunity",
-    title: "Redis Cluster Over-provisioned",
-    body: "Cache hit rate at 98.4% with avg utilization 23%. Scaling from 6→4 replicas would save ~$340/mo with no latency impact at current RPS.",
-    confidence: 88,
-    service: "redis-cluster",
-  },
-  {
-    id: "i4",
-    type: "info",
-    title: "Traffic Spike Predicted — 14:00 UTC",
-    body: "Historical pattern + current order ingestion rate suggests 1.8× RPS peak in ~35 min. Auto-scaling headroom is sufficient; no action required.",
-    confidence: 83,
-    service: "order-processor",
-    eta: "~35 min",
-  },
-]
+type InsightSeverity = NormalisedIncident["type"]
 
 const TYPE_CONFIG: Record<
   InsightSeverity,
@@ -97,28 +57,26 @@ const TYPE_CONFIG: Record<
 
 function ConfidenceBar({ value, type }: { value: number; type: InsightSeverity }) {
   const color =
-    type === "critical" ? "bg-rose-500" :
-    type === "warn"     ? "bg-amber-400" :
+    type === "critical"    ? "bg-rose-500"    :
+    type === "warn"        ? "bg-amber-400"   :
     type === "opportunity" ? "bg-emerald-400" :
     "bg-cyan-400"
-
   return (
     <div className="flex items-center gap-2">
       <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/[0.04]">
-        <div
-          className={cn("h-full rounded-full bar-fill", color)}
-          style={{ width: `${value}%` }}
-        />
+        <div className={cn("h-full rounded-full bar-fill", color)} style={{ width: `${value}%` }} />
       </div>
-      <span className="w-6 text-right font-mono text-[9px] text-zinc-500">
-        {value}%
-      </span>
+      <span className="w-6 text-right font-mono text-[9px] text-zinc-500">{value}%</span>
     </div>
   )
 }
 
-function InsightCard({ insight, expanded, onToggle }: {
-  insight: Insight
+function InsightCard({
+  insight,
+  expanded,
+  onToggle,
+}: {
+  insight: NormalisedIncident
   expanded: boolean
   onToggle: () => void
 }) {
@@ -140,9 +98,7 @@ function InsightCard({ insight, expanded, onToggle }: {
             <span className={cn("rounded border px-1.5 py-0.5 font-mono text-[9px] font-semibold", cfg.badge)}>
               {cfg.label}
             </span>
-            <span className="font-mono text-[9px] text-zinc-600 truncate">
-              {insight.service}
-            </span>
+            <span className="font-mono text-[9px] text-zinc-600 truncate">{insight.service}</span>
             {insight.eta && (
               <span className="ml-auto font-mono text-[9px] text-zinc-600 shrink-0">
                 ETA {insight.eta}
@@ -153,9 +109,7 @@ function InsightCard({ insight, expanded, onToggle }: {
             {insight.title}
           </p>
           {expanded && (
-            <p className="text-[10px] leading-relaxed text-zinc-400 mb-2">
-              {insight.body}
-            </p>
+            <p className="text-[10px] leading-relaxed text-zinc-400 mb-2">{insight.body}</p>
           )}
           <ConfidenceBar value={insight.confidence} type={insight.type} />
         </div>
@@ -172,20 +126,32 @@ function InsightCard({ insight, expanded, onToggle }: {
 }
 
 export function AiGuardian({ downIds }: { downIds: string[] }) {
-  const [expandedId, setExpandedId] = useState<string | null>("i1")
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [scanLine, setScanLine] = useState(false)
   const [analysisTs, setAnalysisTs] = useState("")
 
-  // re-trigger scan animation when incidents change
+  // CHANGED: real data from hook instead of hardcoded INSIGHTS array
+  const { insights, isLoading, error } = useInsights()
+
+  // Set first insight expanded once data arrives
+  useEffect(() => {
+    if (insights.length > 0 && expandedId === null) {
+      setExpandedId(insights[0].id)
+    }
+  }, [insights, expandedId])
+
+  // Re-trigger scan animation when downIds or insights change
   useEffect(() => {
     setScanLine(true)
     const t = setTimeout(() => setScanLine(false), 3000)
     setAnalysisTs(new Date().toLocaleTimeString("en-US", { hour12: false }))
     return () => clearTimeout(t)
-  }, [downIds])
+  }, [downIds, insights.length])
 
-  const criticalCount = INSIGHTS.filter((i) => i.type === "critical").length
-  const warnCount     = INSIGHTS.filter((i) => i.type === "warn").length
+  // CHANGED: counts derived from live data
+  const criticalCount = insights.filter((i) => i.type === "critical").length
+  const warnCount     = insights.filter((i) => i.type === "warn").length
+  const optimizeCount = insights.filter((i) => i.type === "opportunity").length
 
   return (
     <section
@@ -196,48 +162,24 @@ export function AiGuardian({ downIds }: { downIds: string[] }) {
       <div className="flex items-center gap-2">
         <div className="relative">
           <Brain className="h-4 w-4 text-cyan-400" aria-hidden="true" />
-          {scanLine && (
-            <span className="absolute inset-0 animate-ping rounded-full bg-cyan-400/20" />
-          )}
+          {scanLine && <span className="absolute inset-0 animate-ping rounded-full bg-cyan-400/20" />}
         </div>
-        <h2 className="text-sm font-semibold tracking-tight">
-          AI Guardian Insights
-        </h2>
+        <h2 className="text-sm font-semibold tracking-tight">AI Guardian Insights</h2>
         <div className="ml-auto flex items-center gap-2">
           {analysisTs && (
-            <span className="font-mono text-[9px] text-zinc-600">
-              last scan {analysisTs}
-            </span>
+            <span className="font-mono text-[9px] text-zinc-600">last scan {analysisTs}</span>
           )}
         </div>
       </div>
 
-      {/* Summary row */}
+      {/* Summary chips — CHANGED: all counts from live data */}
       <div className="grid grid-cols-3 gap-2">
-        <SummaryChip
-          icon={ShieldAlert}
-          label="Critical"
-          value={criticalCount}
-          color="text-rose-400"
-          bg="bg-rose-500/8 border-rose-500/20"
-        />
-        <SummaryChip
-          icon={TrendingUp}
-          label="Warnings"
-          value={warnCount}
-          color="text-amber-400"
-          bg="bg-amber-500/8 border-amber-400/20"
-        />
-        <SummaryChip
-          icon={Lightbulb}
-          label="Optimize"
-          value={1}
-          color="text-emerald-400"
-          bg="bg-emerald-500/8 border-emerald-400/20"
-        />
+        <SummaryChip icon={ShieldAlert} label="Critical" value={criticalCount} color="text-rose-400"    bg="bg-rose-500/8 border-rose-500/20" />
+        <SummaryChip icon={TrendingUp}  label="Warnings" value={warnCount}     color="text-amber-400"   bg="bg-amber-500/8 border-amber-400/20" />
+        <SummaryChip icon={Lightbulb}   label="Optimize" value={optimizeCount} color="text-emerald-400" bg="bg-emerald-500/8 border-emerald-400/20" />
       </div>
 
-      {/* Scan line effect */}
+      {/* Scan line status bar */}
       <div className="relative overflow-hidden rounded-lg border border-white/[0.04] bg-white/[0.01] px-3 py-2">
         {scanLine && (
           <div
@@ -251,50 +193,42 @@ export function AiGuardian({ downIds }: { downIds: string[] }) {
             Model confidence threshold:{" "}
             <span className="text-zinc-300">≥ 70%</span>
             {" "}· Analyzing{" "}
-            <span className="text-cyan-400">
-              {INSIGHTS.length} active signals
-            </span>
+            {/* CHANGED: live signal count */}
+            <span className="text-cyan-400">{insights.length} active signals</span>
           </span>
         </div>
       </div>
 
-      {/* Insight cards */}
-      <div className="flex flex-col gap-2">
-        {INSIGHTS.map((insight) => (
-          <InsightCard
-            key={insight.id}
-            insight={insight}
-            expanded={expandedId === insight.id}
-            onToggle={() =>
-              setExpandedId(expandedId === insight.id ? null : insight.id)
-            }
-          />
-        ))}
-      </div>
+      {/* Insight cards — CHANGED: renders live insights with skeleton/error states */}
+      {isLoading ? (
+        <InsightSkeleton />
+      ) : error ? (
+        <ErrorBanner message="AI service unreachable — showing cached insights" />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {insights.map((insight) => (
+            <InsightCard
+              key={insight.id}
+              insight={insight}
+              expanded={expandedId === insight.id}
+              onToggle={() =>
+                setExpandedId(expandedId === insight.id ? null : insight.id)
+              }
+            />
+          ))}
+        </div>
+      )}
     </section>
   )
 }
 
 function SummaryChip({
-  icon: Icon,
-  label,
-  value,
-  color,
-  bg,
+  icon: Icon, label, value, color, bg,
 }: {
-  icon: React.ElementType
-  label: string
-  value: number
-  color: string
-  bg: string
+  icon: React.ElementType; label: string; value: number; color: string; bg: string
 }) {
   return (
-    <div
-      className={cn(
-        "flex flex-col items-center gap-1 rounded-lg border px-2 py-2",
-        bg,
-      )}
-    >
+    <div className={cn("flex flex-col items-center gap-1 rounded-lg border px-2 py-2", bg)}>
       <Icon className={cn("h-3.5 w-3.5", color)} aria-hidden="true" />
       <span className={cn("font-mono text-base font-bold leading-none tabular-nums", color)}>
         {value}

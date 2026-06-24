@@ -1,9 +1,22 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// components/activity-feed.tsx   [MODIFIED]
+//
+// CHANGES:
+//   1. Removed hardcoded ACTIVITY import from lib/services
+//   2. Removed fake STREAM_EVENTS and 18s setInterval mock
+//   3. Now uses useActivity() hook → polls /api/incidents?mode=activity every 10s
+//   4. ActivitySkeleton shown on first load
+//   5. Live event count shown in footer from real data length
+//   6. Pulse animation fires when SWR brings new data (via data dependency)
+// ─────────────────────────────────────────────────────────────────────────────
+
 "use client"
 
 import { Activity } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { ACTIVITY } from "@/lib/services"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { useActivity } from "@/lib/hooks/useIncidents"    // CHANGED: new hook
+import { ActivitySkeleton, ErrorBanner } from "@/components/skeletons"
 
 const DOT: Record<string, string> = {
   ok:    "bg-emerald-400 ring-emerald-400/20",
@@ -11,37 +24,27 @@ const DOT: Record<string, string> = {
   error: "bg-rose-500   ring-rose-500/20",
 }
 
-// Mock streaming — new event appears every ~18s
-const STREAM_EVENTS = [
-  { id: "s1", time: "just now", message: "AI auto-scaled order-processor to 5 replicas", level: "ok"   as const },
-  { id: "s2", time: "just now", message: "Anomaly in payments P99 — threshold breach imminent", level: "warn" as const },
-]
-
 export function ActivityFeed() {
-  const [extra, setExtra] = useState<typeof STREAM_EVENTS>([])
+  // CHANGED: real data from hook; no more ACTIVITY constant or fake streaming
+  const { activity, isLoading, error } = useActivity()
   const [pulse, setPulse] = useState(false)
+  const prevCountRef = useRef(0)
 
+  // Pulse the header icon whenever new events arrive from SWR
   useEffect(() => {
-    let i = 0
-    const id = setInterval(() => {
-      if (i >= STREAM_EVENTS.length) { clearInterval(id); return }
-      setExtra((prev) => [STREAM_EVENTS[i], ...prev])
+    if (activity.length > 0 && activity.length !== prevCountRef.current) {
+      prevCountRef.current = activity.length
       setPulse(true)
-      setTimeout(() => setPulse(false), 1200)
-      i++
-    }, 18_000)
-    return () => clearInterval(id)
-  }, [])
-
-  const items = [...extra, ...ACTIVITY]
+      const t = setTimeout(() => setPulse(false), 1500)
+      return () => clearTimeout(t)
+    }
+  }, [activity.length])
 
   return (
-    /*
-      h-full so this section stretches to fill the flex-1 wrapper in page.tsx.
-      overflow-hidden on the section + overflow-y-auto on the list = scroll
-      inside a fixed-height container — no bleed.
-    */
-    <section className="flex h-full flex-col gap-3 rounded-xl border border-white/[0.04] bg-black p-5 overflow-hidden">
+   <section
+  className="flex max-h-[380px] flex-col gap-3 rounded-xl border border-white/[0.04] bg-black p-5 overflow-hidden"
+  aria-label="Recent system activity"
+>
       {/* Header */}
       <div className="flex shrink-0 items-center gap-2">
         <Activity
@@ -51,9 +54,7 @@ export function ActivityFeed() {
           )}
           aria-hidden="true"
         />
-        <h2 className="text-sm font-semibold tracking-tight">
-          Recent System Activity
-        </h2>
+        <h2 className="text-sm font-semibold tracking-tight">Recent System Activity</h2>
         {pulse && (
           <span className="ml-auto flex items-center gap-1">
             <span className="h-1.5 w-1.5 animate-ping rounded-full bg-cyan-400" />
@@ -62,41 +63,46 @@ export function ActivityFeed() {
         )}
       </div>
 
-      {/* Timeline list — scrolls independently */}
-      <ol className="relative flex flex-col overflow-y-auto scrollbar-thin pr-1 min-h-0 flex-1">
-        {/* vertical axis */}
-        <span
-          className="pointer-events-none absolute bottom-2 left-[5px] top-2 w-px bg-white/[0.05]"
-          aria-hidden="true"
-        />
+      {/* Content */}
+      {isLoading ? (
+        <ActivitySkeleton />
+      ) : error ? (
+        <ErrorBanner message="Activity feed unavailable — AI service unreachable" />
+      ) : (
+        /* Timeline list — scrolls independently inside flex-1 wrapper */
+        <ol className="relative flex flex-col overflow-y-auto pr-1 min-h-0 flex-1" aria-label="Activity timeline">
+          {/* vertical axis line */}
+          <span
+            className="pointer-events-none absolute bottom-2 left-[5px] top-2 w-px bg-white/[0.05]"
+            aria-hidden="true"
+          />
 
-        {items.map((item, idx) => (
-          <li
-            key={item.id}
-            className={cn(
-              "relative flex gap-4 pb-4 last:pb-0 transition-opacity duration-700",
-              idx === 0 && extra.length > 0 && extra[0]?.id === item.id
-                ? "animate-pulse-once"
-                : "",
-            )}
-          >
-            <span
-              className={cn(
-                "relative z-10 mt-1 h-2.5 w-2.5 shrink-0 rounded-full ring-4",
-                DOT[item.level],
-              )}
-            />
-            <div className="flex flex-col gap-0.5">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-600">
-                {item.time}
-              </span>
-              <p className="text-[12px] leading-snug text-zinc-300">
-                {item.message}
-              </p>
-            </div>
-          </li>
-        ))}
-      </ol>
+          {/* CHANGED: renders activity items from live API data */}
+          {activity.map((item) => (
+            <li key={item.id} className="relative flex gap-4 pb-4 last:pb-0">
+              <span
+                className={cn(
+                  "relative z-10 mt-1 h-2.5 w-2.5 shrink-0 rounded-full ring-4",
+                  DOT[item.level],
+                )}
+              />
+              <div className="flex flex-col gap-0.5">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-600">
+                  {item.time}
+                </span>
+                <p className="text-[12px] leading-snug text-zinc-300">{item.message}</p>
+              </div>
+            </li>
+          ))}
+
+          {/* Empty state */}
+          {activity.length === 0 && (
+            <li className="flex items-center justify-center py-8">
+              <span className="font-mono text-[11px] text-zinc-600">No incidents recorded yet</span>
+            </li>
+          )}
+        </ol>
+      )}
 
       {/* Footer — live indicator */}
       <div className="shrink-0 flex items-center gap-1.5 border-t border-white/[0.04] pt-2">
@@ -104,8 +110,9 @@ export function ActivityFeed() {
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
           <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
         </span>
+        {/* CHANGED: live event count from real data */}
         <span className="font-mono text-[9px] text-zinc-600">
-          streaming live · {items.length} events
+          streaming live · {activity.length} events
         </span>
       </div>
     </section>

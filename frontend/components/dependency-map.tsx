@@ -1,8 +1,20 @@
 "use client"
 
+// ─────────────────────────────────────────────────────────────────────────────
+// components/dependency-map.tsx   [MODIFIED]
+//
+// CHANGES:
+//   1. Accepts optional `serviceMap` prop (Record<id, ServiceData>) so hover
+//      tooltips show live p99/rps/errorRate from real backend data.
+//   2. When serviceMap is provided, NODES static latency/rps are overridden.
+//   3. downIds still accepted from parent (now derived from real service health).
+//   4. All visual/animation logic unchanged.
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { Waypoints } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, useId } from "react"
+import type { ServiceData } from "@/lib/types"
 
 // ── topology ──────────────────────────────────────────────────────
 type Node = {
@@ -71,7 +83,10 @@ function TrafficParticle({
   x1: number; y1: number; x2: number; y2: number
   color: string; delay: number; critical: boolean
 }) {
-  const pathId = useRef(`p-${Math.random().toString(36).slice(2)}`)
+  // FIX: Replace the random string generator with a safe, stable React ID
+  const stableId = useId()
+  const pathId = `p-${stableId.replace(/:/g, "")}` 
+
   const cls = critical
     ? "traffic-particle-critical"
     : "traffic-particle"
@@ -80,7 +95,7 @@ function TrafficParticle({
     <g>
       <defs>
         <path
-          id={pathId.current}
+          id={pathId}
           d={`M${x1},${y1} L${x2},${y2}`}
         />
       </defs>
@@ -90,7 +105,7 @@ function TrafficParticle({
           repeatCount="indefinite"
           begin={`${delay}s`}
         >
-          <mpath href={`#${pathId.current}`} />
+          <mpath href={`#${pathId}`} />
         </animateMotion>
         <animate
           attributeName="opacity"
@@ -131,7 +146,14 @@ function AnomalyRing({ cx, cy, delay }: { cx: number; cy: number; delay: number 
   )
 }
 
-export function DependencyMap({ downIds }: { downIds: string[] }) {
+export function DependencyMap({
+  downIds,
+  serviceMap = {},
+}: {
+  downIds: string[]
+  // CHANGED: optional live service data keyed by service id (auth/payments/orders)
+  serviceMap?: Record<string, ServiceData>
+}) {
   const [hoveredNode, setHoveredNode] = useState<string | null>(null)
   const [dims, setDims] = useState({ w: 800, h: 320 })
   const containerRef = useRef<HTMLDivElement>(null)
@@ -380,22 +402,26 @@ export function DependencyMap({ downIds }: { downIds: string[] }) {
               </span>
 
               {/* hover tooltip card */}
-              {hovered && (
-                <div className="absolute bottom-full mb-2 z-20 w-44 rounded-lg border border-white/[0.08] bg-zinc-950/95 p-3 shadow-2xl backdrop-blur-md pointer-events-none">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="font-mono text-[10px] font-semibold text-zinc-200">{node.label}</span>
-                    <span className={cn("font-mono text-[9px] uppercase", down ? "text-rose-400" : degraded ? "text-amber-400" : "text-emerald-400")}>
-                      {down ? "CRITICAL" : degraded ? "DEGRADED" : "HEALTHY"}
-                    </span>
+              {hovered && (() => {
+                // CHANGED: prefer live serviceMap data over static node data
+                const live = getLiveNodeData(node, serviceMap)
+                return (
+                  <div className="absolute bottom-full mb-2 z-20 w-44 rounded-lg border border-white/[0.08] bg-zinc-950/95 p-3 shadow-2xl backdrop-blur-md pointer-events-none">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="font-mono text-[10px] font-semibold text-zinc-200">{node.label}</span>
+                      <span className={cn("font-mono text-[9px] uppercase", down ? "text-rose-400" : degraded ? "text-amber-400" : "text-emerald-400")}>
+                        {down ? "CRITICAL" : degraded ? "DEGRADED" : "HEALTHY"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                      <TooltipRow label="RPS"       value={live.rps} />
+                      <TooltipRow label="P99"       value={`${live.latency}ms`} />
+                      <TooltipRow label="Instances" value={`${live.instances}x`} />
+                      <TooltipRow label="Region"    value={live.region} />
+                    </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                    <TooltipRow label="RPS"       value={node.rps} />
-                    <TooltipRow label="P99"       value={`${node.latency}ms`} />
-                    <TooltipRow label="Instances" value={`${node.instances}x`} />
-                    <TooltipRow label="Region"    value={node.sublabel} />
-                  </div>
-                </div>
-              )}
+                )
+              })()}
             </div>
           )
         })}
@@ -411,6 +437,22 @@ function TooltipRow({ label, value }: { label: string; value: string }) {
       <span className="font-mono text-[9px] text-zinc-300">{value}</span>
     </>
   )
+}
+
+// Helper used inside DependencyMap render to get live values for a node
+// Falls back to static NODES data when serviceMap not provided
+function getLiveNodeData(
+  node: { id: string; rps: string; latency: number; instances: number; sublabel: string },
+  serviceMap: Record<string, ServiceData>,
+) {
+  const live = serviceMap[node.id]
+  if (!live) return { rps: node.rps, latency: node.latency, instances: node.instances, region: node.sublabel }
+  return {
+    rps: live.rps,
+    latency: live.latency,
+    instances: node.instances,
+    region: live.region,
+  }
 }
 
 function LegendDot({ color, label }: { color: string; label: string }) {
