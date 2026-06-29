@@ -295,3 +295,49 @@
     animation: none;
   }
 }
+
+/* ─── Screen 2 — Chaos Lab animations ──────────────────────────── */
+
+/* Detonate button pulse ring */
+@keyframes detonate-ring {
+  0%   { transform: scale(1);   opacity: 0.7; }
+  100% { transform: scale(1.8); opacity: 0;   }
+}
+.detonate-ring {
+  animation: detonate-ring 1s ease-out infinite;
+}
+
+/* Running experiment — warm background pulse */
+@keyframes chaos-bg-pulse {
+  0%, 100% { opacity: 0.07; }
+  50%       { opacity: 0.14; }
+}
+.chaos-bg {
+  animation: chaos-bg-pulse 3s ease-in-out infinite;
+}
+
+/* Z-score gauge fill */
+@keyframes gauge-fill {
+  from { width: 0%; }
+}
+.gauge-fill {
+  animation: gauge-fill 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Cascade chain arrow pulse */
+@keyframes arrow-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%       { opacity: 1;   }
+}
+.arrow-pulse {
+  animation: arrow-pulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detonate-ring,
+  .chaos-bg,
+  .gauge-fill,
+  .arrow-pulse {
+    animation: none;
+  }
+}

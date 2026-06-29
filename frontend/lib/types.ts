@@ -146,3 +146,41 @@ export type ActivityItem = {
   message: string
   level: "ok" | "warn" | "error"
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Screen 2 — Chaos Lab types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One service's chaos knobs — sent to POST /api/chaos */
+export type ChaosConfig = {
+  serviceId: string          // "auth" | "payments" | "orders"
+  highLatency: boolean
+  failureRate: number        // 0–100
+  timeoutMode: boolean
+}
+
+/** Response from POST /api/chaos */
+export type ChaosResponse = {
+  success: boolean
+  serviceId: string
+  applied: ChaosConfig
+  message: string
+}
+
+/** Enriched incident for Screen 2 incident feed + command card */
+export type IncidentDetail = BackendIncident & {
+  durationLabel: string      // "4m 32s" computed on frontend
+  timeAgo: string            // "3m ago"
+}
+
+/** Before/after metric snapshot for comparison strip */
+export type MetricSnapshot = {
+  serviceId: string
+  label: string
+  unit: string
+  baseline: number[]         // 10 values before chaos
+  current: number[]          // 10 values during/after chaos
+  currentValue: number
+  baselineValue: number
+  delta: number              // % change
+}

@@ -28,7 +28,7 @@ const start = async () => {
   worker = createOrderWorker();
 
   // Start queue metrics background updater
-  app.startQueueMetricsUpdater();
+  // app.startQueueMetricsUpdater();
 
   logger.info(`${SERVICE_NAME} fully initialized`, {
     service: SERVICE_NAME,

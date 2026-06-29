@@ -11,6 +11,7 @@
 
 import { AnimatedNumber } from "@/components/animated-number"
 import { MetricStripSkeleton } from "@/components/skeletons"
+import { NavTabs } from "@/components/nav-tabs"
 import { useAggregate } from "@/lib/hooks/useAggregate"
 import { cn } from "@/lib/utils"
 import { Activity, Cpu, MemoryStick, Clock, AlertTriangle } from "lucide-react"
@@ -116,7 +117,10 @@ export function HealthHeader() {
           </h1>
         </div>
 
-        {/* Health score pill */}
+        {/* Navigation tabs */}
+          <NavTabs />
+
+          {/* Health score pill */}
         <div
           className={cn(
             "flex items-center gap-4 rounded-xl border border-white/[0.04] bg-black/80 px-4 py-2 shadow-lg transition-shadow duration-500",
@@ -168,7 +172,6 @@ export function HealthHeader() {
 
 function LiveClock() {
   const [time, setTime] = useState("")
-  
   useEffect(() => {
     const tick = () =>
       setTime(
@@ -183,12 +186,8 @@ function LiveClock() {
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
   }, [])
-
   return (
-    <span 
-      className="font-mono text-[10px] tabular-nums text-zinc-600"
-      suppressHydrationWarning // ◄ Add this right here!
-    >
+    <span className="font-mono text-[10px] tabular-nums text-zinc-600">
       {time} UTC
     </span>
   )

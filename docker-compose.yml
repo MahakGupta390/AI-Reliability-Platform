@@ -61,6 +61,8 @@ services:
       LATENCY_MS: ${LATENCY_MS:-0}
       FAILURE_RATE: ${FAILURE_RATE:-0}
       TIMEOUT_MODE: ${TIMEOUT_MODE:-false}
+      # ── CHANGED: Updated default port to 4001 ──
+      CORS_ORIGIN: ${FRONTEND_URL:-http://localhost:4001}
     volumes:
       - ./auth-service/logs:/app/logs
     networks:
@@ -93,6 +95,8 @@ services:
       LATENCY_MS: ${LATENCY_MS:-0}
       FAILURE_RATE: ${FAILURE_RATE:-0}
       TIMEOUT_MODE: ${TIMEOUT_MODE:-false}
+      # ── CHANGED: Updated default port to 4001 ──
+      CORS_ORIGIN: ${FRONTEND_URL:-http://localhost:4001}
     volumes:
       - ./payment-service/logs:/app/logs
     networks:
@@ -130,6 +134,8 @@ services:
       LATENCY_MS: ${LATENCY_MS:-0}
       FAILURE_RATE: ${FAILURE_RATE:-0}
       TIMEOUT_MODE: ${TIMEOUT_MODE:-false}
+      # ── CHANGED: Updated default port to 4001 ──
+      CORS_ORIGIN: ${FRONTEND_URL:-http://localhost:4001}
     volumes:
       - ./order-service/logs:/app/logs
     networks:
@@ -169,35 +175,6 @@ services:
       order-service:
         condition: service_healthy
 
-  grafana:
-    image: grafana/grafana:10.2.0
-    container_name: grafana
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/system-overview.json
-      GF_ALERTING_ENABLED: "false"
-      GF_UNIFIED_ALERTING_ENABLED: "true"
-      GF_LOG_LEVEL: warn
-      GF_AUTH_ANONYMOUS_ENABLED: "false"
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - grafana_data:/var/lib/grafana
-    networks:
-      - reliability-net
-    depends_on:
-      - prometheus
-
-  # ── ai-service ────────────────────────────────────────────────────────────────
-  # Statistical anomaly detection engine.
-  # Polls Prometheus every 10 seconds, computes Z-scores, creates/resolves
-  # incident documents in MongoDB automatically.
-  # No webhooks — pure polling architecture.
-  # UI: GET /incidents, GET /incidents/open, GET /analysis
   ai-service:
     build:
       context: ./ai-service
@@ -210,24 +187,17 @@ services:
       PORT: 3004
       SERVICE_NAME: ai-service
       NODE_ENV: production
-      # MongoDB — dedicated database for incident storage
-      MONGO_URI: mongodb://mongodb:27017/ai_db
-      # Prometheus URL — must use container name inside Docker network
-      PROMETHEUS_URL: http://prometheus:9090
-      # How often to poll Prometheus (milliseconds)
-      # 10000 = every 10 seconds
-      POLL_INTERVAL_MS: 10000
-      # Z-score threshold to create an incident
-      # 3.0 = 3 standard deviations above baseline
-      # Probability of false positive at this level: 0.13%
-      Z_SCORE_TRIGGER: "3.0"
-      # Z-score threshold to auto-resolve an incident
-      # 1.5 = 1.5 standard deviations — well within normal range
-      # Hysteresis gap (1.5 to 3.0) prevents flapping
-      Z_SCORE_RESOLVE: "1.5"
+      MONGO_URI: mongodb://mongodb:27017/aegis_ai_db
       LOG_LEVEL: info
-    volumes:
-      - ./ai-service/logs:/app/logs
+      PROMETHEUS_URL: http://prometheus:9090
+      POLL_INTERVAL_MS: 10000
+      Z_SCORE_TRIGGER: 3.0
+      Z_SCORE_RESOLVE: 1.5
+      AUTH_SERVICE_URL: http://auth-service:3001
+      PAYMENT_SERVICE_URL: http://payment-service:3002
+      ORDER_SERVICE_URL: http://order-service:3003
+      # ── CHANGED: Updated default port to 4001 ──
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4001}
     networks:
       - reliability-net
     depends_on:
@@ -236,15 +206,32 @@ services:
       prometheus:
         condition: service_started
 
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3005:3000"   # Freeing up port 3000 completely
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_UNIFIED_ALERTING_ENABLED: "true"
+      GF_LOG_LEVEL: warn
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - reliability-net
+    depends_on:
+      - prometheus
+
 volumes:
   mongo_data:
-    driver: local
   redis_data:
-    driver: local
   prometheus_data:
-    driver: local
   grafana_data:
-    driver: local
 
 networks:
   reliability-net:
