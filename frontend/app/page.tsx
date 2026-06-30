@@ -1,36 +1,33 @@
+"use client"
 // ─────────────────────────────────────────────────────────────────────────────
-// app/page.tsx   [MODIFIED]
+// app/page.tsx  [MODIFIED — Screen 3]
 //
 // CHANGES:
-//   1. Removed useState for downIds — now derived from useServices() hook
-//   2. Removed SERVICES import from lib/services — live data from hook
-//   3. Removed healthScore useMemo + PENALTY calculation — HealthHeader is now
-//      self-contained (reads from useAggregate which includes healthScore)
-//   4. HealthHeader no longer receives a `score` prop
-//   5. ServiceCard no longer receives isDown prop — derived from service.status
-//   6. ServiceCardSkeleton shown while services are loading
+//   1. useRouter added — "Simulate Anomaly" navigates to /chaos?target=id
+//   2. Service cards get an onClick on the card title linking to /services/[id]
 // ─────────────────────────────────────────────────────────────────────────────
 
-"use client"
-
-import { HealthHeader } from "@/components/health-header"
-import { DependencyMap } from "@/components/dependency-map"
-import { ServiceCard } from "@/components/service-card"
-import { ActivityFeed } from "@/components/activity-feed"
-import { AiGuardian } from "@/components/ai-guardian"
+import { useRouter } from "next/navigation"
+import { HealthHeader }      from "@/components/health-header"
+import { DependencyMap }     from "@/components/dependency-map"
+import { ServiceCard }       from "@/components/service-card"
+import { ActivityFeed }      from "@/components/activity-feed"
+import { AiGuardian }        from "@/components/ai-guardian"
 import { ServiceCardSkeleton } from "@/components/skeletons"
-import { useServices } from "@/lib/hooks/useServices"   // CHANGED: new hook
+import { useServices }       from "@/lib/hooks/useServices"
 
 export default function Page() {
-  // CHANGED: live services from backend, downIds auto-derived from status
+  const router = useRouter()
   const { services, downIds, isLoading } = useServices()
-
-  // Build a lookup map for DependencyMap tooltips
   const serviceMap = Object.fromEntries(services.map((s) => [s.id, s]))
+
+  // "Simulate Anomaly" → Chaos Lab with service pre-targeted
+  const handleSimulate = (serviceId: string) => {
+    router.push(`/chaos?target=${serviceId}`)
+  }
 
   return (
     <div className="min-h-svh bg-black">
-      {/* CHANGED: no score prop — HealthHeader reads from useAggregate() itself */}
       <HealthHeader />
 
       <main className="mx-auto max-w-screen-2xl px-4 py-4 md:px-6 md:py-5">
@@ -38,25 +35,21 @@ export default function Page() {
 
           {/* ── LEFT column ─────────────────────────────────────────────────── */}
           <div className="flex flex-col gap-3">
-
-            {/* DependencyMap — CHANGED: downIds now from real service health */}
             <div className="flex-1 min-h-0">
-              {/* CHANGED: serviceMap passes live latency/rps to node tooltips */}
               <DependencyMap downIds={downIds} serviceMap={serviceMap} />
             </div>
 
-            {/* Service cards grid */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               {isLoading
-                ? // CHANGED: skeleton cards during first load instead of blank
-                  [1, 2, 3].map((i) => <ServiceCardSkeleton key={i} />)
+                ? [1, 2, 3].map((i) => <ServiceCardSkeleton key={i} />)
                 : services.map((service) => (
                     <ServiceCard
                       key={service.id}
                       service={service}
-                      // onToggle kept for optional demo chaos — will wire to
-                      // real /api/chaos POST in Screen 2
-                      onToggle={undefined}
+                      // "Simulate Anomaly" → /chaos?target=id
+                      onToggle={() => handleSimulate(service.id)}
+                      // Card title click → /services/[id]  (handled inside ServiceCard)
+                      href={`/services/${service.id}`}
                     />
                   ))}
             </div>
@@ -64,7 +57,6 @@ export default function Page() {
 
           {/* ── RIGHT column ────────────────────────────────────────────────── */}
           <div className="flex h-full flex-col gap-3">
-            {/* CHANGED: downIds from real data so AI panel reacts to real incidents */}
             <AiGuardian downIds={downIds} />
             <div className="flex-1 min-h-0">
               <ActivityFeed />

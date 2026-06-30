@@ -184,3 +184,143 @@ export type MetricSnapshot = {
   baselineValue: number
   delta: number              // % change
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Screen 3 — Service Deep Dive types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Full detail for one service — returned by GET /api/services/[id] */
+export type ServiceDetail = {
+  id: string
+  name: string
+  region: string
+  status: "UP" | "DOWN" | "DEGRADED"
+  uptime: string                  // "12h 34m 22s"
+  uptimeSeconds: number
+  instances: number               // static for now
+  simulation: {
+    highLatency: boolean
+    failureRate: number
+    timeoutMode: boolean
+  }
+  latency: {
+    avgMs: number
+    p95Ms: number
+    p99Ms: number
+    minMs: number
+    maxMs: number
+  }
+  summary: {
+    totalRequests: number
+    totalErrors: number
+    errorRate: number             // numeric
+    throughputRpm: number         // requests per minute
+    rps: string                   // formatted "1.2k"
+  }
+  endpoints: EndpointRow[]
+  recentRequests: RecentRequest[]
+  sparkSeries: number[]           // last-20 p99 values for header mini-chart
+}
+
+export type EndpointRow = {
+  method: string
+  endpoint: string
+  totalRequests: number
+  totalErrors: number
+  errorRate: number               // numeric %
+  avgLatencyMs: number
+  p95LatencyMs: number
+  p99LatencyMs: number
+}
+
+export type RecentRequest = {
+  requestId: string
+  method: string
+  endpoint: string
+  statusCode: number
+  latencyMs: number
+  timestamp: string
+}
+
+/** Time range options for chart controls */
+export type TimeRange = "15m" | "1h" | "6h" | "24h"
+
+/** One data point for a time-series chart */
+export type ChartPoint = {
+  t: number     // unix ms
+  v: number     // value
+}
+
+/** Service incident history row */
+export type ServiceIncident = {
+  incidentId: string
+  severity: "low" | "medium" | "high" | "critical"
+  symptom: string
+  detectedAt: string
+  resolvedAt: string | null
+  durationLabel: string
+  status: "open" | "resolved"
+  peakZScore: number
+  peakP99Ms: number
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Screen 4 — Incident History & Postmortem types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Incident stats summary returned by GET /api/incidents/stats */
+export type IncidentStats = {
+  total:         number
+  open:          number
+  resolved:      number
+  mttrMs:        number | null
+  mttrFormatted: string
+  mttdFormatted: string
+  bySeverity: {
+    critical: number
+    high:     number
+    medium:   number
+    low:      number
+  }
+  mttrTrend: { date: string; mttrMs: number }[]   // last 14 days
+}
+
+/** Enriched incident row for the table */
+export type IncidentRow = {
+  id:              string   // MongoDB _id
+  incidentId:      string
+  status:          "open" | "resolved"
+  severity:        "low" | "medium" | "high" | "critical"
+  affectedService: string
+  symptom:         string
+  detectedAt:      string
+  resolvedAt:      string | null
+  durationLabel:   string
+  timeAgo:         string
+  peakZScore:      number
+  peakP99Ms:       number
+  chaosInjected:   boolean
+  evidence: {
+    rootCause:            string
+    rootCauseConfidence:  "LOW" | "MEDIUM" | "HIGH"
+    baselineMeanMs:       number
+    baselineStdDev:       number
+    currentP99Ms:         number
+    zScore:               number
+    deviationFactor:      number
+    allServicesSnapshot:  Record<string, {
+      currentP99Ms: number
+      zScore:       number
+      status:       "normal" | "anomalous" | "no_data"
+    }>
+  }
+  timeline: { at: string; event: string; zScore?: number; p99Ms?: number }[]
+}
+
+/** Filter state for incident table */
+export type IncidentFilters = {
+  status:   "all" | "open" | "resolved"
+  severity: "all" | "low" | "medium" | "high" | "critical"
+  service:  "all" | "auth-service" | "payment-service" | "order-service"
+  search:   string
+}

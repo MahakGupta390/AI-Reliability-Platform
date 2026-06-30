@@ -1,17 +1,19 @@
 "use client"
 // ─────────────────────────────────────────────────────────────────────────────
-// components/nav-tabs.tsx  [NEW]
-// Shared tab bar used in HealthHeader for switching between Screen 1 + 2.
+// components/nav-tabs.tsx  [MODIFIED — Screen 4]
+// Added Incidents tab for Screen 4.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { LayoutDashboard, FlaskConical } from "lucide-react"
+import { LayoutDashboard, FlaskConical, Server, History } from "lucide-react"
 
 const TABS = [
-  { href: "/",      label: "Overview",   icon: LayoutDashboard },
-  { href: "/chaos", label: "Chaos Lab",  icon: FlaskConical    },
+  { href: "/",          label: "Overview",   icon: LayoutDashboard, exact: true  },
+  { href: "/chaos",     label: "Chaos Lab",  icon: FlaskConical,    exact: false },
+  { href: "/services",  label: "Services",   icon: Server,          exact: false },
+  { href: "/incidents", label: "Incidents",  icon: History,         exact: false },
 ]
 
 export function NavTabs() {
@@ -22,8 +24,8 @@ export function NavTabs() {
       className="flex items-center gap-1 rounded-lg border border-white/[0.04] bg-white/[0.02] p-0.5"
       aria-label="Main navigation"
     >
-      {TABS.map(({ href, label, icon: Icon }) => {
-        const active = href === "/" ? path === "/" : path.startsWith(href)
+      {TABS.map(({ href, label, icon: Icon, exact }) => {
+        const active = exact ? path === href : path.startsWith(href)
         return (
           <Link
             key={href}

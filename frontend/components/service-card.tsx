@@ -12,8 +12,9 @@
 
 "use client"
 
-import { ArrowDownRight, ArrowUpRight, RotateCw, Zap } from "lucide-react"
+import { ArrowDownRight, ArrowUpRight, RotateCw, Zap, ExternalLink } from "lucide-react"
 import { motion } from "motion/react"
+import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -30,9 +31,11 @@ function errorRateColor(rate: number, isDown: boolean) {
 export function ServiceCard({
   service,
   onToggle,
+  href,
 }: {
-  service: ServiceData               // CHANGED: ServiceData not Service
-  onToggle?: () => void              // CHANGED: optional — only used for demo chaos button
+  service: ServiceData
+  onToggle?: () => void
+  href?: string                        // NEW: links card title to /services/[id]
 }) {
   // CHANGED: isDown derived from real status — no longer parent-controlled toggle
   const isDown = service.status === "DOWN" || service.status === "DEGRADED"
@@ -63,9 +66,19 @@ export function ServiceCard({
         {/* Header */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex flex-col gap-1 min-w-0">
-            <h3 className="truncate text-sm font-semibold leading-none tracking-tight">
-              {service.name}
-            </h3>
+            {href ? (
+              <Link
+                href={href}
+                className="truncate text-sm font-semibold leading-none tracking-tight hover:text-cyan-300 transition-colors flex items-center gap-1 group"
+              >
+                {service.name}
+                <ExternalLink className="h-2.5 w-2.5 opacity-0 group-hover:opacity-60 transition-opacity" />
+              </Link>
+            ) : (
+              <h3 className="truncate text-sm font-semibold leading-none tracking-tight">
+                {service.name}
+              </h3>
+            )}
             <span className="font-mono text-[10px] text-zinc-500">{service.region}</span>
           </div>
           {/* CHANGED: passes service.status so DEGRADED renders amber badge */}

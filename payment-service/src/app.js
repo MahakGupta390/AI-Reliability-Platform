@@ -1,22 +1,14 @@
-/**
- * src/app.js  [MODIFIED — payment-service]
- *
- * CHANGE FOR SCREEN 2:
- * Added: simulateRoutes mounted at /simulate
- * All other code unchanged from original.
- */
-
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const errorHandler      = require('./middleware/errorHandler');
+const errorHandler = require('./middleware/errorHandler');
 const latencyMiddleware = require('./middleware/latency.middleware');
-const requestLogger     = require('./middleware/requestLogger.middleware');
-const failureSimulator  = require('./middleware/failureSimulator.middleware');
-const paymentRoutes   = require('./routes/payment.routes');
-const metricsRoutes     = require('./routes/metrics.routes');
-const simulateRoutes    = require('./routes/simulate.routes');   // NEW
+const requestLogger = require('./middleware/requestLogger.middleware');
+const failureSimulator = require('./middleware/failureSimulator.middleware');
+const paymentRoutes = require('./routes/payment.routes');
+const metricsRoutes = require('./routes/metrics.routes');
 
 const app = express();
+
 app.use(express.json({ limit: '10kb' }));
 
 app.use((req, res, next) => {
@@ -37,16 +29,15 @@ app.get('/health', (req, res) => {
     uptime: process.uptime(),
     simulation: {
       highLatency: process.env.HIGH_LATENCY === 'true',
-      latencyMs:   parseInt(process.env.LATENCY_MS || '0'),
+      latencyMs: parseInt(process.env.LATENCY_MS || '0'),
       failureRate: parseFloat(process.env.FAILURE_RATE || '0'),
       timeoutMode: process.env.TIMEOUT_MODE === 'true',
     },
   });
 });
 
-app.use('/payment',   paymentRoutes);
-app.use('/metrics',     metricsRoutes);
-app.use('/simulate',    simulateRoutes);    // NEW
+app.use('/payment', paymentRoutes);
+app.use('/metrics', metricsRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
