@@ -1,21 +1,28 @@
 /**
- * ai-service/server.js  [MODIFIED — Screen 4]
+ * ai-service/server.js  [MODIFIED — Screen 5]
  *
- * CHANGES from Screen 3 version:
+ * CHANGES from Screen 4 version:
  *
- * 1. incidentAnalyticsRoutes mounted — provides Screen 4 specific endpoints:
- *      GET    /incidents/stats          → StatsBar + MttrChart
- *      GET    /incidents/search         → IncidentTable filtering
- *      PATCH  /incidents/:id/acknowledge → PostmortemDrawer acknowledge
- *      PATCH  /incidents/:id/resolve     → PostmortemDrawer resolve
+ * 1. configStore.loadConfigStore() called during startup, BEFORE
+ *    startAnomalyDetector() — the detector now depends on the config
+ *    store being loaded into memory first.
  *
- * 2. Route mounting ORDER is critical — Screen 4 analytics routes are
- *    mounted BEFORE the existing catch-all GET /incidents/:id route
- *    so that /stats and /search don't get swallowed as :id params.
+ * 2. analysisConfigRouter mounted at /analysis — adds PATCH /analysis/baselines
+ *    and PATCH /analysis/detector. The existing GET /analysis/baselines route
+ *    is REPLACED here to read from configStore (live, persisted) instead of
+ *    the old frozen BASELINES import from anomalyDetector.
  *
- * 3. All Screen 2 endpoints preserved (PATCH /incidents/:id, GET /chaos/state)
- * 4. All Screen 3 endpoints preserved (GET /service-stats/:serviceId)
- * 5. All original endpoints preserved (GET /incidents, GET /analysis, etc.)
+ * 3. settingsConfigRouter mounted at /config — NEW namespace for
+ *    alert-thresholds and registry endpoints.
+ *
+ * 4. GET /analysis now reads zScoreTrigger/zScoreResolve/pollIntervalMs/
+ *    baselines from configStore.getFullConfig() instead of importing
+ *    BASELINES (which no longer exists — removed from anomalyDetector exports).
+ *
+ * 5. anomalyDetector import no longer destructures BASELINES — only
+ *    startAnomalyDetector and stopAnomalyDetector are imported.
+ *
+ * All Screen 1-4 endpoints are otherwise UNCHANGED.
  */
 
 require('dotenv').config();
@@ -23,15 +30,15 @@ require('dotenv').config();
 const express = require('express');
 const axios   = require('axios');
 
-const connectDB    = require('./src/config/db');
-const logger       = require('./src/config/logger');
-const { startAnomalyDetector, BASELINES } = require('./src/services/anomalyDetector');
-const Incident     = require('./src/models/incident.model');
+const connectDB = require('./src/config/db');
+const logger    = require('./src/config/logger');
+const configStore = require('./src/config/configStore');          // NEW — Screen 5
+const { startAnomalyDetector, stopAnomalyDetector } = require('./src/services/anomalyDetector'); // CHANGED: no BASELINES import
+const Incident = require('./src/models/incident.model');
 
-// Screen 3 routes
 const serviceStatsRoutes      = require('./src/routes/serviceStats.routes');
-// Screen 4 routes — NEW
 const incidentAnalyticsRoutes = require('./src/routes/incidentAnalytics.routes');
+const { analysisConfigRouter, settingsConfigRouter } = require('./src/routes/config.routes'); // NEW — Screen 5
 
 const PORT         = process.env.PORT || 3004;
 const SERVICE_NAME = process.env.SERVICE_NAME || 'ai-service';
@@ -56,27 +63,30 @@ app.use((req, res, next) => {
 
 // ── HEALTH ────────────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
+  const cfg = configStore.getFullConfig();
   res.status(200).json({
     status: 'ok',
     service: SERVICE_NAME,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     prometheusUrl: process.env.PROMETHEUS_URL || 'http://prometheus:9090',
-    pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '10000', 10),
-    monitoredServices: Object.keys(BASELINES),
-    baselines: BASELINES,
+    pollIntervalMs: cfg.pollIntervalMs,
+    monitoredServices: Object.keys(cfg.baselines || {}),
+    baselines: cfg.baselines,
   });
 });
 
 // ── Screen 3: service stats ───────────────────────────────────────────────────
 app.use('/service-stats', serviceStatsRoutes);
 
-// ── Screen 4: incident analytics ─────────────────────────────────────────────
-// MUST be mounted BEFORE the individual GET /incidents + GET /incidents/:id
-// handlers below, so that /stats and /search are not swallowed as :id values.
+// ── Screen 4: incident analytics — must mount BEFORE generic /incidents/:id ──
 app.use('/incidents', incidentAnalyticsRoutes);
 
-// ── INCIDENTS: original list endpoints (Screens 1 + 2) ───────────────────────
+// ── Screen 5: config routes — NEW ─────────────────────────────────────────────
+app.use('/analysis', analysisConfigRouter);   // adds PATCH /analysis/baselines, PATCH /analysis/detector
+app.use('/config',   settingsConfigRouter);   // GET/PATCH /config/alert-thresholds, /config/registry
+
+// ── INCIDENTS: original list endpoints (Screens 1 + 2) — UNCHANGED ──────────
 app.get('/incidents', async (req, res) => {
   try {
     const { status, service, limit = 50, skip = 0 } = req.query;
@@ -98,8 +108,7 @@ app.get('/incidents', async (req, res) => {
 
 app.get('/incidents/open', async (req, res) => {
   try {
-    const incidents = await Incident.find({ status: 'open' })
-      .sort({ detectedAt: -1 }).lean();
+    const incidents = await Incident.find({ status: 'open' }).sort({ detectedAt: -1 }).lean();
     res.status(200).json({ success: true, count: incidents.length, data: incidents });
   } catch (err) {
     logger.error('GET /incidents/open error', { service: SERVICE_NAME, error: err.message });
@@ -107,7 +116,6 @@ app.get('/incidents/open', async (req, res) => {
   }
 });
 
-// Screen 2: generic PATCH (status field in body — kept for backward compat)
 app.patch('/incidents/:id', async (req, res) => {
   try {
     const { status, acknowledgedBy = 'aegis-dashboard' } = req.body;
@@ -122,8 +130,7 @@ app.patch('/incidents/:id', async (req, res) => {
     if (!incident) return res.status(404).json({ success: false, message: 'Incident not found' });
 
     if (status === 'resolved') {
-      if (incident.status === 'resolved')
-        return res.status(400).json({ success: false, message: 'Already resolved' });
+      if (incident.status === 'resolved') return res.status(400).json({ success: false, message: 'Already resolved' });
       await incident.resolve(0, 0);
       incident.timeline.push({ at: new Date(), event: 'Manually resolved by ' + acknowledgedBy, zScore: 0, p99Ms: 0 });
       await incident.save();
@@ -148,7 +155,6 @@ app.patch('/incidents/:id', async (req, res) => {
   }
 });
 
-// Single incident by id — must come AFTER /open, /stats, /search
 app.get('/incidents/:id', async (req, res) => {
   try {
     const incident = await Incident.findOne({
@@ -165,7 +171,7 @@ app.get('/incidents/:id', async (req, res) => {
   }
 });
 
-// ── ANALYSIS (Screen 1 + 2 — UNCHANGED) ──────────────────────────────────────
+// ── ANALYSIS (Screen 1 + 2) — MODIFIED: now reads from configStore ──────────
 app.get('/analysis', async (req, res) => {
   try {
     const openCount     = await Incident.countDocuments({ status: 'open' });
@@ -174,16 +180,20 @@ app.get('/analysis', async (req, res) => {
       .sort({ detectedAt: -1 }).limit(5)
       .select('incidentId status severity affectedService detectedAt resolvedAt durationMs peakZScore peakP99Ms')
       .lean();
+
+    // CHANGED: read live values from configStore instead of process.env consts
+    const cfg = configStore.getFullConfig();
+
     res.status(200).json({
       success: true,
       data: {
         detector: {
-          pollIntervalMs:  parseInt(process.env.POLL_INTERVAL_MS || '10000', 10),
+          pollIntervalMs:  cfg.pollIntervalMs,
           prometheusUrl:   process.env.PROMETHEUS_URL || 'http://prometheus:9090',
-          zScoreTrigger:   parseFloat(process.env.Z_SCORE_TRIGGER || '3.0'),
-          zScoreResolve:   parseFloat(process.env.Z_SCORE_RESOLVE || '1.5'),
+          zScoreTrigger:   cfg.zScoreTrigger,
+          zScoreResolve:   cfg.zScoreResolve,
         },
-        baselines: BASELINES,
+        baselines: cfg.baselines,
         summary: { openIncidents: openCount, resolvedIncidents: resolvedCount },
         recentIncidents,
       },
@@ -194,11 +204,10 @@ app.get('/analysis', async (req, res) => {
   }
 });
 
-app.get('/analysis/baselines', (req, res) => {
-  res.status(200).json({ success: true, baselines: BASELINES });
-});
+// NOTE: GET /analysis/baselines and PATCH /analysis/baselines + /analysis/detector
+// are now handled by analysisConfigRouter mounted above — no duplicate route here.
 
-// Screen 2: chaos state aggregator
+// Screen 2: chaos state aggregator — UNCHANGED
 app.get('/chaos/state', async (req, res) => {
   const results = await Promise.allSettled(
     Object.entries(MICROSERVICE_URLS).map(async ([name, url]) => {
@@ -227,13 +236,23 @@ app.use((err, req, res, next) => {
 // ── STARTUP ───────────────────────────────────────────────────────────────────
 const start = async () => {
   await connectDB();
+
+  // NEW — Screen 5: load persisted config into memory BEFORE the detector
+  // starts reading from it. This upserts the singleton doc on first boot.
+  await configStore.loadConfigStore();
+
   app.listen(PORT, () => {
     logger.info(SERVICE_NAME + ' running on port ' + PORT, { service: SERVICE_NAME, port: PORT });
   });
+
   await startAnomalyDetector();
 };
 
-process.on('SIGTERM', () => { logger.info('SIGTERM received', { service: SERVICE_NAME }); process.exit(0); });
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM received', { service: SERVICE_NAME });
+  stopAnomalyDetector();
+  process.exit(0);
+});
 process.on('unhandledRejection', reason => {
   logger.error('Unhandled rejection', { service: SERVICE_NAME, reason: String(reason) });
 });
