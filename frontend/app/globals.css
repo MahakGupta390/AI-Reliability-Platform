@@ -341,3 +341,139 @@
     animation: none;
   }
 }
+
+/* ─── Screen 4 — Incident History animations ────────────────────── */
+
+/* MTTR bar chart fill-in on load */
+@keyframes bar-rise {
+  from { transform: scaleY(0); transform-origin: bottom; }
+  to   { transform: scaleY(1); transform-origin: bottom; }
+}
+.bar-rise {
+  animation: bar-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Stacked severity bar fill */
+@keyframes stack-fill {
+  from { width: 0%; }
+}
+.stack-fill {
+  animation: stack-fill 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Drawer slide in from right */
+@keyframes drawer-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.drawer-in {
+  animation: drawer-in 0.2s ease-out forwards;
+}
+
+/* Row expand */
+@keyframes row-expand {
+  from { opacity: 0; max-height: 0; }
+  to   { opacity: 1; max-height: 600px; }
+}
+.row-expand {
+  animation: row-expand 0.25s ease-out forwards;
+  overflow: hidden;
+}
+
+/* Postmortem shimmer while generating */
+@keyframes pm-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+.pm-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(34, 211, 238, 0.05) 40%,
+    rgba(34, 211, 238, 0.10) 50%,
+    rgba(34, 211, 238, 0.05) 60%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: pm-shimmer 2s ease-in-out infinite;
+}
+
+/* Live dot pulse for open incidents */
+@keyframes live-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);   }
+  50%       { opacity: 0.4; transform: scale(1.4); }
+}
+.live-pulse {
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar-rise,
+  .stack-fill,
+  .drawer-in,
+  .row-expand,
+  .pm-shimmer,
+  .live-pulse {
+    animation: none;
+  }
+}
+
+/* ─── Utility: thin scrollbar for overflow-y panels ────────────── */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(63 63 70) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgb(63 63 70);
+  border-radius: 999px;
+}
+
+/* ─── Select element dark theme ────────────────────────────────── */
+select option {
+  background-color: rgb(24 24 27);
+  color: rgb(212 212 216);
+}
+
+/* ─── Screen 5 — Settings animations ────────────────────────────── */
+
+/* Save button success flash */
+@keyframes save-flash {
+  0%   { background-color: rgba(16, 185, 129, 0.15); }
+  100% { background-color: transparent; }
+}
+.save-flash {
+  animation: save-flash 0.6s ease-out;
+}
+
+/* Tab underline slide */
+@keyframes tab-underline {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+.tab-underline {
+  animation: tab-underline 0.2s ease-out forwards;
+  transform-origin: left;
+}
+
+/* Zone gauge fill on mount */
+@keyframes zone-fill {
+  from { opacity: 0; transform: scaleX(0.9); }
+  to   { opacity: 1; transform: scaleX(1); }
+}
+.zone-fill {
+  animation: zone-fill 0.4s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .save-flash,
+  .tab-underline,
+  .zone-fill {
+    animation: none;
+  }
+}

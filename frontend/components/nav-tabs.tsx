@@ -1,19 +1,20 @@
 "use client"
 // ─────────────────────────────────────────────────────────────────────────────
-// components/nav-tabs.tsx  [MODIFIED — Screen 4]
-// Added Incidents tab for Screen 4.
+// components/nav-tabs.tsx  [MODIFIED — Screen 5]
+// Added Settings tab — final screen of the Aegis AI platform.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { LayoutDashboard, FlaskConical, Server, History } from "lucide-react"
+import { LayoutDashboard, FlaskConical, Server, History, Settings } from "lucide-react"
 
 const TABS = [
   { href: "/",          label: "Overview",   icon: LayoutDashboard, exact: true  },
   { href: "/chaos",     label: "Chaos Lab",  icon: FlaskConical,    exact: false },
   { href: "/services",  label: "Services",   icon: Server,          exact: false },
   { href: "/incidents", label: "Incidents",  icon: History,         exact: false },
+  { href: "/settings",  label: "Settings",   icon: Settings,        exact: false },
 ]
 
 export function NavTabs() {

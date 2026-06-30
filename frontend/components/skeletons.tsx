@@ -104,3 +104,47 @@ export function ErrorBanner({ message }: { message: string }) {
     </div>
   )
 }
+
+// ─── Screen 4 skeletons ───────────────────────────────────────────────────────
+
+export function StatBarSkeleton() {
+  return (
+    <div className="flex flex-col gap-3 animate-pulse">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {[1,2,3,4,5].map((i) => (
+          <div key={i} className="h-20 rounded-xl border border-white/[0.04] bg-black" />
+        ))}
+      </div>
+      <div className="h-16 rounded-xl border border-white/[0.04] bg-black" />
+    </div>
+  )
+}
+
+export function TableSkeleton() {
+  return (
+    <div className="rounded-xl border border-white/[0.04] bg-black overflow-hidden animate-pulse">
+      <div className="h-10 border-b border-white/[0.04] bg-white/[0.01]" />
+      {[1,2,3,4,5,6].map((i) => (
+        <div key={i} className="flex items-center gap-3 px-4 py-3.5 border-b border-white/[0.03]">
+          <div className="h-2 w-2 rounded-full bg-white/[0.06]" />
+          <div className="h-3 w-24 rounded bg-white/[0.05]" />
+          <div className="h-3 flex-1 rounded bg-white/[0.04]" />
+          <div className="h-3 w-16 rounded bg-white/[0.04]" />
+          <div className="h-3 w-10 rounded bg-white/[0.04]" />
+          <div className="h-3 w-12 rounded bg-white/[0.04]" />
+          <div className="h-3 w-16 rounded bg-white/[0.05]" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function DrawerSkeleton() {
+  return (
+    <div className="flex flex-col gap-4 animate-pulse">
+      <div className="h-48 rounded-xl border border-white/[0.04] bg-black" />
+      <div className="h-32 rounded-xl border border-white/[0.04] bg-black" />
+      <div className="h-52 rounded-xl border border-white/[0.04] bg-black" />
+    </div>
+  )
+}

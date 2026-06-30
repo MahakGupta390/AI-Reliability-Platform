@@ -15,7 +15,8 @@
 import { cn } from "@/lib/utils"
 import { Brain, TrendingUp, ShieldAlert, Lightbulb, ChevronRight, Zap } from "lucide-react"
 import { useEffect, useState } from "react"
-import { useInsights } from "@/lib/hooks/useIncidents"    // CHANGED: new hook
+import { useRouter } from "next/navigation"
+import { useInsights } from "@/lib/hooks/useIncidents"
 import { InsightSkeleton, ErrorBanner } from "@/components/skeletons"
 import type { NormalisedIncident } from "@/lib/types"
 
@@ -80,7 +81,18 @@ function InsightCard({
   expanded: boolean
   onToggle: () => void
 }) {
-  const cfg = TYPE_CONFIG[insight.type]
+  const router = useRouter()
+  const cfg    = TYPE_CONFIG[insight.type]
+
+  // Open incidents → navigate to /incidents; resolved → just expand
+  const handleClick = () => {
+    if (insight.status === "open" && insight.type === "critical") {
+      router.push(`/incidents`)
+    } else {
+      onToggle()
+    }
+  }
+
   return (
     <button
       className={cn(
@@ -88,7 +100,7 @@ function InsightCard({
         cfg.border,
         cfg.bg,
       )}
-      onClick={onToggle}
+      onClick={handleClick}
       aria-expanded={expanded}
     >
       <div className="flex items-start gap-2">
